@@ -105,8 +105,11 @@ public:
 
     bool Open(const std::filesystem::path& filepath, std::string& failreason);
     void ExtractFiles(const int index);
+    bool CanExtractFile(const int index, std::string& reason) const;
     bool Extract(const std::filesystem::path& filepath, const std::filesystem::path& extract,
                  std::string& failreason);
+    bool ExportFileList(const std::filesystem::path& output_path);
+    bool GetEntryDataById(u32 entry_id, std::vector<u8>& out_data, std::string& failreason) const;
 
     std::vector<u8> sfo;
 

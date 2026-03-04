@@ -1,0 +1,50 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "GNU",
+	"compiler-id" : "Clang",
+	"compiler-simulate-id" : "MSVC",
+	"config" : "Release",
+	"cxx-modules" : {},
+	"database-info" : null,
+	"dir-cur-bld" : "C:/_repositories/PkgXtractor/build-win/externals/pugixml",
+	"dir-cur-src" : "C:/_repositories/PkgXtractor/externals/pugixml",
+	"dir-top-bld" : "C:/_repositories/PkgXtractor/build-win",
+	"dir-top-src" : "C:/_repositories/PkgXtractor",
+	"exports" : 
+	[
+		{
+			"cxx-module-info-dir" : "",
+			"destination" : "lib/cmake/pugixml",
+			"export-name" : "static",
+			"export-prefix" : "C:/_repositories/PkgXtractor/build-win/externals/pugixml/CMakeFiles/Export/be764272e56105fc8ff11fec8314e604",
+			"filesystem-export-name" : "static",
+			"install" : true,
+			"namespace" : "pugixml::"
+		},
+		{
+			"cxx-module-info-dir" : "",
+			"destination" : "C:/_repositories/PkgXtractor/build-win/externals/pugixml",
+			"export-name" : "static",
+			"export-prefix" : "C:/_repositories/PkgXtractor/build-win/externals/pugixml",
+			"filesystem-export-name" : "static",
+			"install" : false,
+			"namespace" : "pugixml::"
+		}
+	],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"C:\\_repositories\\PkgXtractor\\externals\\pugixml\\src"
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "C:/_repositories/PkgXtractor/build-win/externals/pugixml/CMakeFiles/pugixml-static.dir",
+	"sources" : 
+	{
+		"externals/pugixml/CMakeFiles/pugixml-static.dir/src/pugixml.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "C:/_repositories/PkgXtractor/externals/pugixml/src/pugixml.cpp"
+		}
+	}
+}

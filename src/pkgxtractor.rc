@@ -1,0 +1,5 @@
+#include "winresrc.h"
+
+LANGUAGE LANG_NEUTRAL, 0x8
+
+IDI_ICON1 ICON "images/pkgxtractor..ico"

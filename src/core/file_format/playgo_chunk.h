@@ -10,10 +10,12 @@
 
 constexpr u32 PLAYGO_MAGIC = 0x6F676C70;
 
+#pragma pack(1)
+
 struct chunk_t {
     u32 offset;
     u32 length;
-} __attribute__((packed));
+};
 
 struct PlaygoHeader {
     u32 magic;
@@ -43,7 +45,7 @@ struct PlaygoHeader {
     chunk_t scenario_chunks;
     chunk_t scenario_labels;
     chunk_t inner_mchunk_attrs; // [0;12800]
-} __attribute__((packed));
+};
 
 struct playgo_scenario_attr_entry_t {
     u8 _type;
@@ -52,13 +54,13 @@ struct playgo_scenario_attr_entry_t {
     u16 chunk_count;
     u32 chunks_offset; //<-scenario_chunks
     u32 label_offset;  //<-scenario_labels
-} __attribute__((packed));
+};
 
 struct image_disc_layer_no_t {
     u8 layer_no : 2;
     u8 disc_no : 2;
     u8 image_no : 4;
-} __attribute__((packed));
+};
 
 struct playgo_chunk_attr_entry_t {
     u8 flag;
@@ -69,24 +71,26 @@ struct playgo_chunk_attr_entry_t {
     u64 language_mask;
     u32 mchunks_offset; //<-chunk_mchunks
     u32 label_offset;   //<-chunk_labels
-} __attribute__((packed));
+};
 
 struct playgo_chunk_loc_t {
     u64 offset : 48;
     u64 _align1 : 8;
     u64 image_no : 4;
     u64 _align2 : 4;
-} __attribute__((packed));
+};
 
 struct playgo_chunk_size_t {
     u64 size : 48;
     u64 _align : 16;
-} __attribute__((packed));
+};
 
 struct playgo_mchunk_attr_entry_t {
     playgo_chunk_loc_t loc;
     playgo_chunk_size_t size;
-} __attribute__((packed));
+};
+
+#pragma pack()
 
 struct PlaygoChunk {
     u64 req_locus;

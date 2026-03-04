@@ -5,15 +5,12 @@
 #include <sstream>
 #include <vector>
 #include <cstdint>
+#include <algorithm>
 #include "../../src/core/file_format/pkg.h"
 #include "../../src/core/file_format/psf.h"
 #include "../../src/common/path_util.h"
 #include "../../src/common/string_util.h"
 #include "../../src/core/loader.h"
-
-using PSF = Psf;
-using PkgFile = ::Pkg::Pkg;
-using LoaderClass = Loader;
 
 std::vector<std::string> SplitString(const std::string& str, char delimiter) {
 	std::vector<std::string> tokens;
@@ -40,22 +37,23 @@ int main(int argc, char** argv){
 	if (Loader::DetectFileType(file) == Loader::FileTypes::Pkg) {
 		std::cout << file << " is a valid PKG\n" << std::endl;
 		
-		PkgFile pkg = PkgFile();
+		PKG pkg{};
 		
 		std::string failreason;
-		if (!pkg.Open(file, failreason)) {
+		if (!pkg.Extract(file, output_folder_path.empty() ? file.parent_path() : output_folder_path,
+		                 failreason)) {
 			std::cout << "Cannot open PKG file : " << failreason << std::endl;
 		}else{
 			std::cout << "open PKG file success" << std::endl;
 			
-			PSF psf = PSF();
+			PSF psf{};
 			
 			if (!psf.Open(pkg.sfo)) {
 				std::cout << "Could not read SFO." << std::endl;
 			}else{
 				std::cout << "Successfully read SFO." << std::endl;
 				
-				auto dlc_flag = psf.GetEntry(0x20 - 1);
+				auto dlc_flag_data = psf.GetInteger("CONTENT_TYPE");
 				
 				if (output_folder_path == ""){
 					output_folder_path = file.parent_path();
@@ -63,33 +61,33 @@ int main(int argc, char** argv){
 				
 				std::string folder_name = "";
 				
-				if(dlc_flag != nullptr && *(uint32_t*)dlc_flag->value.data() != 0){
+				if(dlc_flag_data && dlc_flag_data.value() != 0){
 					std::cout << "DLC detected.\n";
-					auto title_id = psf.GetEntry(0x22 - 1);
-					if (title_id != nullptr) {
-						folder_name = std::string((char*)title_id->value.data(), title_id->value.size());
+					auto title_id_data = psf.GetString("TITLE_ID");
+					if (title_id_data) {
+						folder_name = std::string(title_id_data.value());
 						folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'), folder_name.end());
 						folder_name = "[DLC] " + folder_name;
 					}
 				} else{
 					std::cout << "Game or Patch detected.\n";
-					auto title = psf.GetEntry(0x23 - 1);
-					if (title != nullptr) {
-						folder_name = std::string((char*)title->value.data(), title->value.size());
+					auto title_data = psf.GetString("TITLE");
+					if (title_data) {
+						folder_name = std::string(title_data.value());
 						folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'), folder_name.end());
 					}
 				}
 				
-				output_folder_path = output_folder_path / folder_name;
-				
-				std::cout << "Game/DLC folder will be extracted to: " << output_folder_path.string() << std::endl;
-				
-				for (auto& file : pkg.GetFiles()) {
-					std::cout << "Extracting: " << file.path << std::endl;
-					
-					if (!pkg.Extract(file, output_folder_path)) {
-						std::cout << "Error extracting " << file.path << std::endl;
-					}
+				if (!folder_name.empty()) {
+					output_folder_path = output_folder_path / folder_name;
+				}
+
+				std::cout << "Game/DLC folder will be extracted to: " << output_folder_path.string()
+				          << std::endl;
+
+				const u32 files_count = pkg.GetNumberOfFiles();
+				for (u32 index = 0; index < files_count; ++index) {
+					pkg.ExtractFiles(static_cast<int>(index));
 				}
 				
 				std::cout << "Extraction complete!\n" << std::endl;

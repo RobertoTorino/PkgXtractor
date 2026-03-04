@@ -1,0 +1,3 @@
+ninja_dyndep_version = 1.0
+build externals/pugixml/CMakeFiles/pugixml-static.dir/src/pugixml.cpp.obj: dyndep
+

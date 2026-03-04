@@ -7,6 +7,15 @@ cmake_minimum_required(VERSION 3.24)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+if (WIN32)
+    set(CMAKE_ASM_MASM_COMPILER
+        "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/ml64.exe"
+        CACHE FILEPATH "MASM compiler" FORCE)
+    set(CMAKE_ASM_MASM_FLAGS
+        "${CMAKE_ASM_MASM_FLAGS} /I\"C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared\""
+        CACHE STRING "MASM flags" FORCE)
+endif()
+
 if(APPLE)
     list(APPEND ADDITIONAL_LANGUAGES OBJC)
     # Starting with 15.4, Rosetta 2 has support for all the necessary instruction sets.
@@ -56,7 +65,7 @@ endif()
 if (ARCHITECTURE STREQUAL "x86_64")
     # Target x86-64-v3 CPU architecture as this is a good balance between supporting performance critical
     # instructions like AVX2 and maintaining support for older CPUs.
-    add_compile_options(-march=x86-64-v3)
+    add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:-march=x86-64-v3>)
 endif()
 
 if (APPLE AND ARCHITECTURE STREQUAL "x86_64" AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
@@ -1183,6 +1192,13 @@ else()
     )
 endif()
 
+if (ENABLE_QT_GUI)
+    set(SHADPS4_OUTPUT_NAME "shadps4-qt")
+else()
+    set(SHADPS4_OUTPUT_NAME "shadps4-cli")
+endif()
+set_target_properties(shadps4 PROPERTIES OUTPUT_NAME "${SHADPS4_OUTPUT_NAME}")
+
 create_target_directory_groups(shadps4)
 
 target_link_libraries(shadps4 PRIVATE magic_enum::magic_enum fmt::fmt toml11::toml11 tsl::robin_map xbyak::xbyak Tracy::TracyClient RenderDoc::API FFmpeg::ffmpeg Dear_ImGui gcn half::half ZLIB::ZLIB PNG::PNG)
@@ -1299,7 +1315,11 @@ if (WIN32)
 endif()
 
 if (WIN32)
-    target_sources(shadps4 PRIVATE src/shadps4.rc)
+    if (CMAKE_RC_COMPILER)
+        target_sources(shadps4 PRIVATE src/shadps4.rc)
+    else()
+        message(WARNING "Windows resource compiler not found; executable icon/version resource will be omitted.")
+    endif()
 endif()
 
 add_definitions(-DBOOST_ASIO_STANDALONE)
@@ -1356,6 +1376,27 @@ if (ENABLE_DISCORD_RPC)
     target_link_libraries(shadps4 PRIVATE discord-rpc)
 endif()
 
+# Generate VERSION.txt with build timestamp and type for shadPS4
+if (ENABLE_QT_GUI)
+    set(SHADPS4_VARIANT "Qt GUI (shadps4-qt)")
+else()
+    set(SHADPS4_VARIANT "SDL CLI (shadps4-cli)")
+endif()
+
+add_custom_command(TARGET shadps4 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "shadPS4 Build Information" > "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "================================" >> "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Build Date: $<TARGET_PROPERTY:shadps4,SHADPS4_BUILD_TIME>" >> "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Build Type: $<CONFIG>" >> "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Variant: ${SHADPS4_VARIANT}" >> "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "================================" >> "$<TARGET_FILE_DIR:shadps4>/VERSION.txt"
+    COMMENT "Generating VERSION.txt for shadPS4"
+)
+
+# Set build timestamp as a target property (evaluated at configure time)
+string(TIMESTAMP SHADPS4_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+set_target_properties(shadps4 PROPERTIES SHADPS4_BUILD_TIME "${SHADPS4_BUILD_TIMESTAMP}")
+
 # Install rules
 install(TARGETS shadps4 BUNDLE DESTINATION .)
 
@@ -1368,6 +1409,8 @@ endif()
 
 # Build PkgXtractor utility
 set(PKGXTRACTOR_SOURCES
+    src/core/crypto/crypto.cpp
+    src/core/crypto/crypto.h
     src/core/file_format/pkg.cpp
     src/core/file_format/pkg.h
     src/core/file_format/pkg_type.cpp
@@ -1381,14 +1424,22 @@ set(PKGXTRACTOR_SOURCES
 )
 
 set(PKGXTRACTOR_COMMON_SOURCES
+    src/common/config.cpp
+    src/common/config.h
+    ${CMAKE_CURRENT_BINARY_DIR}/src/common/scm_rev.cpp
+    src/common/scm_rev.h
     src/common/io_file.cpp
     src/common/io_file.h
+    src/common/ntapi.cpp
+    src/common/ntapi.h
     src/common/path_util.cpp
     src/common/path_util.h
     src/common/string_util.cpp
     src/common/string_util.h
     src/common/error.cpp
     src/common/error.h
+    src/common/thread.cpp
+    src/common/thread.h
     src/common/assert.cpp
     src/common/assert.h
     src/common/logging/backend.cpp
@@ -1412,18 +1463,48 @@ set(PKGXTRACTOR_LOADER_SOURCES
     src/core/loader.h
 )
 
-add_executable(PkgXtractor
-    tools/pkgxtractor/main.cpp
-    ${PKGXTRACTOR_SOURCES}
-    ${PKGXTRACTOR_COMMON_SOURCES}
-    ${PKGXTRACTOR_LOADER_SOURCES}
-)
+if (ENABLE_QT_GUI)
+    # Qt version of PkgXtractor
+    qt_add_executable(PkgXtractor
+        tools/pkgxtractor/gui.cpp
+        ${PKGXTRACTOR_SOURCES}
+        ${PKGXTRACTOR_COMMON_SOURCES}
+        ${PKGXTRACTOR_LOADER_SOURCES}
+    )
+    set_target_properties(PkgXtractor PROPERTIES 
+        OUTPUT_NAME "pkgxtractor-qt"
+        WIN32_EXECUTABLE TRUE
+    )
+else()
+    # CLI version of PkgXtractor
+    add_executable(PkgXtractor
+        tools/pkgxtractor/main.cpp
+        ${PKGXTRACTOR_SOURCES}
+        ${PKGXTRACTOR_COMMON_SOURCES}
+        ${PKGXTRACTOR_LOADER_SOURCES}
+    )
+    set_target_properties(PkgXtractor PROPERTIES OUTPUT_NAME "pkgxtractor-cli")
+endif()
+
+if (WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/pkgxtractor.rc")
+    target_sources(PkgXtractor PRIVATE src/pkgxtractor.rc)
+endif()
 
 target_link_libraries(PkgXtractor PRIVATE 
     cryptopp
     ZLIB::ZLIB
     fmt::fmt
+    toml11::toml11
+    Tracy::TracyClient
 )
+
+if (WIN32)
+    target_link_libraries(PkgXtractor PRIVATE bcrypt)
+endif()
+
+if (ENABLE_QT_GUI)
+    target_link_libraries(PkgXtractor PRIVATE Qt6::Widgets Qt6::Core)
+endif()
 
 if (MSVC)
     target_compile_options(PkgXtractor PRIVATE /W3)
@@ -1432,4 +1513,29 @@ else()
     target_compile_options(PkgXtractor PRIVATE -Wall -Wextra)
 endif()
 
-message(STATUS "PkgXtractor executable configured")
+# Generate VERSION.txt with build timestamp and type using post-build command
+if (ENABLE_QT_GUI)
+    set(PKGXTRACTOR_VARIANT "Qt GUI (pkgxtractor-qt)")
+else()
+    set(PKGXTRACTOR_VARIANT "CLI (pkgxtractor-cli)")
+endif()
+
+add_custom_command(TARGET PkgXtractor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "PkgXtractor Build Information" > "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "================================" >> "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Build Date: $<TARGET_PROPERTY:PkgXtractor,PKGXTRACTOR_BUILD_TIME>" >> "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Build Type: $<CONFIG>" >> "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "Variant: ${PKGXTRACTOR_VARIANT}" >> "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMAND ${CMAKE_COMMAND} -E echo "================================" >> "$<TARGET_FILE_DIR:PkgXtractor>/VERSION.txt"
+    COMMENT "Generating VERSION.txt for PkgXtractor"
+)
+
+# Set build timestamp as a target property (evaluated at configure time)
+string(TIMESTAMP PKGXTRACTOR_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+set_target_properties(PkgXtractor PROPERTIES PKGXTRACTOR_BUILD_TIME "${PKGXTRACTOR_BUILD_TIMESTAMP}")
+
+if (ENABLE_QT_GUI)
+    message(STATUS "PkgXtractor Qt GUI executable configured (pkgxtractor-qt)")
+else()
+    message(STATUS "PkgXtractor CLI executable configured (pkgxtractor-cli)")
+endif()
