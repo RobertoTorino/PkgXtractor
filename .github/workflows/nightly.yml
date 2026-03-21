@@ -1,6 +1,3 @@
-# Nightly/Beta Build Workflow for PkgXtractor (C++/Qt)
-# Triggers: push to dev, or tags like test-v*
-
 name: Nightly / Beta Build
 
 on:
