@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 
 #include "crypto.h"
 
@@ -114,9 +116,18 @@ void Crypto::aesCbcCfb128Decrypt(std::span<const CryptoPP::byte, 32> ivkey,
     CryptoPP::AES::Decryption aesDecryption(key.data(), CryptoPP::AES::DEFAULT_KEYLENGTH);
     CryptoPP::CBC_Mode_ExternalCipher::Decryption cbcDecryption(aesDecryption, iv.data());
 
-    for (size_t i = 0; i < decrypted.size(); i += CryptoPP::AES::BLOCKSIZE) {
+    const size_t process_size = std::min(decrypted.size(), ciphertext.size());
+    const size_t full_blocks_size =
+        (process_size / CryptoPP::AES::BLOCKSIZE) * CryptoPP::AES::BLOCKSIZE;
+
+    for (size_t i = 0; i < full_blocks_size; i += CryptoPP::AES::BLOCKSIZE) {
         cbcDecryption.ProcessData(decrypted.data() + i, ciphertext.data() + i,
                                   CryptoPP::AES::BLOCKSIZE);
+    }
+
+    if (process_size > full_blocks_size) {
+        std::memcpy(decrypted.data() + full_blocks_size, ciphertext.data() + full_blocks_size,
+                    process_size - full_blocks_size);
     }
 }
 
@@ -132,9 +143,18 @@ void Crypto::aesCbcCfb128DecryptEntry(std::span<const CryptoPP::byte, 32> ivkey,
     CryptoPP::AES::Decryption aesDecryption(key.data(), CryptoPP::AES::DEFAULT_KEYLENGTH);
     CryptoPP::CBC_Mode_ExternalCipher::Decryption cbcDecryption(aesDecryption, iv.data());
 
-    for (size_t i = 0; i < decrypted.size(); i += CryptoPP::AES::BLOCKSIZE) {
+    const size_t process_size = std::min(decrypted.size(), ciphertext.size());
+    const size_t full_blocks_size =
+        (process_size / CryptoPP::AES::BLOCKSIZE) * CryptoPP::AES::BLOCKSIZE;
+
+    for (size_t i = 0; i < full_blocks_size; i += CryptoPP::AES::BLOCKSIZE) {
         cbcDecryption.ProcessData(decrypted.data() + i, ciphertext.data() + i,
                                   CryptoPP::AES::BLOCKSIZE);
+    }
+
+    if (process_size > full_blocks_size) {
+        std::memcpy(decrypted.data() + full_blocks_size, ciphertext.data() + full_blocks_size,
+                    process_size - full_blocks_size);
     }
 }
 
@@ -156,8 +176,17 @@ void Crypto::decryptEFSM(std::span<CryptoPP::byte, 16> trophyKey,
     CryptoPP::CBC_Mode<CryptoPP::AES>::Decryption decrypt;
     decrypt.SetKeyWithIV(trpKey.data(), trpKey.size(), efsmIv.data());
 
-    for (size_t i = 0; i < decrypted.size(); i += CryptoPP::AES::BLOCKSIZE) {
+    const size_t process_size = std::min(decrypted.size(), ciphertext.size());
+    const size_t full_blocks_size =
+        (process_size / CryptoPP::AES::BLOCKSIZE) * CryptoPP::AES::BLOCKSIZE;
+
+    for (size_t i = 0; i < full_blocks_size; i += CryptoPP::AES::BLOCKSIZE) {
         decrypt.ProcessData(decrypted.data() + i, ciphertext.data() + i, CryptoPP::AES::BLOCKSIZE);
+    }
+
+    if (process_size > full_blocks_size) {
+        std::memcpy(decrypted.data() + full_blocks_size, ciphertext.data() + full_blocks_size,
+                    process_size - full_blocks_size);
     }
 }
 
@@ -189,9 +218,14 @@ void Crypto::PfsGenCryptoKey(std::span<const CryptoPP::byte, 32> ekpfs,
 void Crypto::decryptPFS(std::span<const CryptoPP::byte, 16> dataKey,
                         std::span<const CryptoPP::byte, 16> tweakKey, std::span<const u8> src_image,
                         std::span<CryptoPP::byte> dst_image, u64 sector) {
-    // Start at 0x10000 to keep the header when decrypting the whole pfs_image.
-    for (int i = 0; i < src_image.size(); i += 0x1000) {
-        const u64 current_sector = sector + (i / 0x1000);
+    constexpr size_t SectorSize = 0x1000;
+    constexpr size_t BlockSize = 16;
+
+    const size_t bytes_available = std::min(src_image.size(), dst_image.size());
+    const size_t full_sectors_bytes = bytes_available & ~(SectorSize - 1);
+
+    for (size_t i = 0; i < full_sectors_bytes; i += SectorSize) {
+        const u64 current_sector = sector + (i / SectorSize);
         CryptoPP::ECB_Mode<CryptoPP::AES>::Encryption encrypt(tweakKey.data(), tweakKey.size());
         CryptoPP::ECB_Mode<CryptoPP::AES>::Decryption decrypt(dataKey.data(), dataKey.size());
 
@@ -203,13 +237,19 @@ void Crypto::decryptPFS(std::span<const CryptoPP::byte, 16> dataKey,
         // Encrypt the tweak for each sector.
         encrypt.ProcessData(encryptedTweak.data(), tweak.data(), 16);
 
-        for (int plaintextOffset = 0; plaintextOffset < 0x1000; plaintextOffset += 16) {
+        for (size_t plaintextOffset = 0; plaintextOffset < SectorSize; plaintextOffset += BlockSize) {
             xtsXorBlock(xorBuffer.data(), src_image.data() + i + plaintextOffset,
                         encryptedTweak.data());                          // x, c, t
-            decrypt.ProcessData(xorBuffer.data(), xorBuffer.data(), 16); // x, x
+            decrypt.ProcessData(xorBuffer.data(), xorBuffer.data(), BlockSize); // x, x
             xtsXorBlock(dst_image.data() + i + plaintextOffset, xorBuffer.data(),
                         encryptedTweak.data()); //(p)  c, x , t
             xtsMult(encryptedTweak);
         }
+    }
+
+    // Preserve any trailing partial sector bytes without decrypting to avoid overruns.
+    if (bytes_available > full_sectors_bytes) {
+        std::memcpy(dst_image.data() + full_sectors_bytes, src_image.data() + full_sectors_bytes,
+                    bytes_available - full_sectors_bytes);
     }
 }

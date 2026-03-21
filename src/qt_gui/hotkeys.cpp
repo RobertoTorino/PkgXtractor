@@ -4,7 +4,6 @@
 #include <fstream>
 #include <QKeyEvent>
 #include <QMessageBox>
-#include <QtConcurrent/qtconcurrentrun.h>
 #include <SDL3/SDL.h>
 
 #include "common/config.h"
@@ -73,7 +72,9 @@ Hotkeys::Hotkeys(bool isGameRunning, QWidget* parent)
                      this, &Hotkeys::processSDLEvents);
 
     if (!GameRunning) {
-        Polling = QtConcurrent::run(&Hotkeys::pollSDLEvents, this);
+        sdlEventTimer = new QTimer(this);
+        connect(sdlEventTimer, &QTimer::timeout, this, &Hotkeys::pollSDLEvents);
+        sdlEventTimer->start(10); // Poll SDL events every 10ms on the GUI thread.
     }
 }
 
@@ -886,17 +887,12 @@ void Hotkeys::processSDLEvents(int Type, int Input, int Value) {
 }
 
 void Hotkeys::pollSDLEvents() {
+    if (!SdlEventWrapper::Wrapper::wrapperActive) {
+        return;
+    }
+
     SDL_Event event;
-    while (SdlEventWrapper::Wrapper::wrapperActive) {
-
-        if (!SDL_WaitEvent(&event)) {
-            return;
-        }
-
-        if (event.type == SDL_EVENT_QUIT) {
-            return;
-        }
-
+    while (SDL_PollEvent(&event)) {
         SdlEventWrapper::Wrapper::GetInstance()->Wrapper::ProcessEvent(&event);
     }
 }
@@ -912,10 +908,11 @@ void Hotkeys::Cleanup() {
         SDL_free(h_gamepads);
 
     if (!GameRunning) {
-        SDL_Event quitLoop{};
-        quitLoop.type = SDL_EVENT_QUIT;
-        SDL_PushEvent(&quitLoop);
-        Polling.waitForFinished();
+        if (sdlEventTimer) {
+            sdlEventTimer->stop();
+            delete sdlEventTimer;
+            sdlEventTimer = nullptr;
+        }
 
         SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
         SDL_QuitSubSystem(SDL_INIT_EVENTS);

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <QDialog>
-#include <QFuture>
 #include <QTimer>
 #include <SDL3/SDL_gamepad.h>
 
@@ -62,7 +61,7 @@ private:
     QMap<int, QString> pressedButtons;
     QList<QPushButton*> PadButtonsList;
     QList<QPushButton*> KBButtonsList;
-    QFuture<void> Polling;
+    QTimer* sdlEventTimer = nullptr;
 
     Ui::Hotkeys* ui;
 

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include "common/endian.h"
+#include "common/io_file.h"
 #include "core/crypto/crypto.h"
 #include "pfs.h"
 #include "trp.h"
@@ -129,6 +130,10 @@ public:
         return std::string_view(pkgTitleID, 9);
     }
 
+    std::string_view GetContentID() {
+        return std::string_view(pkgContentID);
+    }
+
     PKGHeader GetPkgHeader() {
         return pkgheader;
     }
@@ -154,6 +159,7 @@ private:
     TRP trp;
     u64 pkgSize = 0;
     char pkgTitleID[9];
+    char pkgContentID[37];  // 36-byte content ID + null terminator
     PKGHeader pkgheader;
     std::string pkgFlags;
 
@@ -174,4 +180,5 @@ private:
     std::filesystem::path pkgpath;
     std::filesystem::path current_dir;
     std::filesystem::path extract_path;
+    Common::FS::IOFile m_pkgFile; // Persistent file handle to avoid opening per-file
 };

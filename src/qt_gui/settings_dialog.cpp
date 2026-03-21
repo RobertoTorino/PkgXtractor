@@ -7,6 +7,7 @@
 #include <QFileDialog>
 #include <QHoverEvent>
 #include <QMessageBox>
+#include <QTimer>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
 
@@ -536,7 +537,9 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
     SdlEventWrapper::Wrapper::wrapperActive = true;
     if (!is_game_running) {
         SDL_InitSubSystem(SDL_INIT_EVENTS);
-        Polling = QtConcurrent::run(&SettingsDialog::pollSDLevents, this);
+        sdlEventTimer = new QTimer(this);
+        connect(sdlEventTimer, &QTimer::timeout, this, &SettingsDialog::pollSDLevents);
+        sdlEventTimer->start(10); // Poll SDL events every 10ms
     } else {
         SdlEventWrapper::Wrapper* DeviceEventWrapper = SdlEventWrapper::Wrapper::GetInstance();
         QObject::connect(DeviceEventWrapper, &SdlEventWrapper::Wrapper::audioDeviceChanged, this,
@@ -555,10 +558,11 @@ void SettingsDialog::closeEvent(QCloseEvent* event) {
 
     SdlEventWrapper::Wrapper::wrapperActive = false;
     if (!is_game_running) {
-        SDL_Event quitLoop{};
-        quitLoop.type = SDL_EVENT_QUIT;
-        SDL_PushEvent(&quitLoop);
-        Polling.waitForFinished();
+        if (sdlEventTimer) {
+            sdlEventTimer->stop();
+            delete sdlEventTimer;
+            sdlEventTimer = nullptr;
+        }
 
         SDL_QuitSubSystem(SDL_INIT_EVENTS);
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
@@ -1215,16 +1219,13 @@ void SettingsDialog::setDefaultValues() {
 }
 
 void SettingsDialog::pollSDLevents() {
+    if (!SdlEventWrapper::Wrapper::wrapperActive) {
+        return;
+    }
+
     SDL_Event event;
-    while (SdlEventWrapper::Wrapper::wrapperActive) {
-
-        if (!SDL_WaitEvent(&event)) {
-            return;
-        }
-
-        if (event.type == SDL_EVENT_QUIT) {
-            return;
-        }
+    // Process all pending SDL events
+    while (SDL_PollEvent(&event)) {
 
         if (event.type == SDL_EVENT_AUDIO_DEVICE_ADDED) {
             onAudioDeviceChange(true);

@@ -1467,6 +1467,7 @@ if (ENABLE_QT_GUI)
     # Qt version of PkgXtractor
     qt_add_executable(PkgXtractor
         tools/pkgxtractor/gui.cpp
+        tools/pkgxtractor_qt/resources.qrc
         ${PKGXTRACTOR_SOURCES}
         ${PKGXTRACTOR_COMMON_SOURCES}
         ${PKGXTRACTOR_LOADER_SOURCES}

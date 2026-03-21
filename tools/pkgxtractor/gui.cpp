@@ -28,11 +28,16 @@
 #include <Qt>
 #include <QScreen>
 #include <QKeyEvent>
-#include <QScrollArea>
+#include <QMouseEvent>
+#include <QContextMenuEvent>
 #include <QCheckBox>
+#include <QMenu>
+#include <QWidgetAction>
 #include <QProcess>
 #include <QFileInfo>
 #include <QDir>
+#include <QPointer>
+#include <QWindow>
 #include <filesystem>
 #include <iostream>
 #include <fstream>
@@ -79,39 +84,88 @@ std::string SanitizeFolderName(std::string folder_name) {
     return folder_name;
 }
 
+static bool DirectoryHasEntries(const std::filesystem::path& directory,
+                                std::vector<std::string>& sample_entries,
+                                std::string& error_message) {
+    sample_entries.clear();
+    std::error_code ec;
+
+    if (!std::filesystem::exists(directory, ec) || ec) {
+        return false;
+    }
+
+    if (!std::filesystem::is_directory(directory, ec) || ec) {
+        error_message = "Target path exists but is not a directory";
+        return true;
+    }
+
+    std::filesystem::directory_iterator iter(directory, ec);
+    std::filesystem::directory_iterator end;
+    if (ec) {
+        error_message = "Failed to inspect target directory";
+        return true;
+    }
+
+    for (; iter != end; iter.increment(ec)) {
+        if (ec) {
+            error_message = "Failed while enumerating target directory";
+            return true;
+        }
+        if (sample_entries.size() < 5) {
+            sample_entries.push_back(iter->path().filename().string());
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static bool OpenPkgWithRetry(PKG& pkg, const std::filesystem::path& path, std::string& failreason,
+                             int maxAttempts = 3, int delayMs = 120) {
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        failreason.clear();
+        if (pkg.Open(path, failreason)) {
+            return true;
+        }
+        if (attempt < maxAttempts) {
+            QThread::msleep(static_cast<unsigned long>(delayMs));
+        }
+    }
+    return false;
+}
+
 // Full-screen borderless image viewer
 class FullScreenImageViewer : public QWidget {
     Q_OBJECT
 
 public:
     explicit FullScreenImageViewer(const QString& imagePath, QWidget* parent = nullptr)
-        : QWidget(parent), m_imagePath(imagePath) {
-        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-        setAttribute(Qt::WA_TranslucentBackground, false);
-        setStyleSheet("background-color: black;");
+        : QWidget(parent) {
+        initializeUi();
 
-        QVBoxLayout* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-
-        m_imageLabel = new QLabel();
-        m_imageLabel->setAlignment(Qt::AlignCenter);
-        m_imageLabel->setStyleSheet("background-color: black;");
-
-        QScrollArea* scrollArea = new QScrollArea();
-        scrollArea->setWidget(m_imageLabel);
-        scrollArea->setWidgetResizable(true);
-        scrollArea->setStyleSheet("QScrollArea { background-color: black; border: none; }");
-
-        layout->addWidget(scrollArea);
-        setLayout(layout);
-
-        // Load and display image
         QImage img(imagePath);
         if (!img.isNull()) {
-            displayImage(img);
+            m_originalPixmap = QPixmap::fromImage(img);
+            updateScaledImage();
         } else {
-            showMessage("pic0.png missing or not available");
+            showMessage("Preview image missing or not available");
         }
+    }
+
+    explicit FullScreenImageViewer(const QImage& image, QWidget* parent = nullptr)
+        : QWidget(parent) {
+        initializeUi();
+
+        if (!image.isNull()) {
+            m_originalPixmap = QPixmap::fromImage(image);
+            updateScaledImage();
+        } else {
+            showMessage("Preview image missing or not available");
+        }
+    }
+
+    void setContentId(const QString& contentId) {
+        m_contentId = contentId;
     }
 
 protected:
@@ -123,24 +177,95 @@ protected:
         }
     }
 
-private:
-    void displayImage(const QImage& img) {
-        QPixmap pixmap = QPixmap::fromImage(img);
-        QScreen* screen = QGuiApplication::primaryScreen();
-        QRect screenGeometry = screen->geometry();
-
-        // Scale image to fit screen while maintaining aspect ratio
-        QPixmap scaledPixmap = pixmap.scaledToHeight(
-            screenGeometry.height(),
-            Qt::SmoothTransformation);
-
-        if (scaledPixmap.width() > screenGeometry.width()) {
-            scaledPixmap = pixmap.scaledToWidth(
-                screenGeometry.width(),
-                Qt::SmoothTransformation);
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::RightButton) {
+            event->ignore();
+            return;
         }
 
-        m_imageLabel->setPixmap(scaledPixmap);
+        // Preserve the original behavior for closing fullscreen.
+        close();
+        event->accept();
+    }
+
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        QMenu menu(this);
+
+        auto* saveAction = new QWidgetAction(&menu);
+        auto* saveButton = new QPushButton("save as wallpaper");
+        saveButton->setEnabled(!m_originalPixmap.isNull());
+        saveButton->setCursor(Qt::PointingHandCursor);
+        saveButton->setMinimumSize(260, 52);
+
+        QFont buttonFont = saveButton->font();
+        if (buttonFont.pointSize() > 0) {
+            buttonFont.setPointSize(buttonFont.pointSize() + 2);
+        } else if (buttonFont.pixelSize() > 0) {
+            buttonFont.setPixelSize(buttonFont.pixelSize() + 2);
+        }
+        saveButton->setFont(buttonFont);
+        saveButton->setStyleSheet("QPushButton { text-align: center; }");
+
+        connect(saveButton, &QPushButton::clicked, this,
+                &FullScreenImageViewer::saveCurrentImageAsWallpaper);
+        connect(saveButton, &QPushButton::clicked, &menu, &QMenu::close);
+
+        saveAction->setDefaultWidget(saveButton);
+        menu.addAction(saveAction);
+        menu.exec(event->globalPos());
+        event->accept();
+    }
+
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        updateScaledImage();
+    }
+
+private:
+    void initializeUi() {
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        setAttribute(Qt::WA_TranslucentBackground, false);
+        setAttribute(Qt::WA_DeleteOnClose, true);
+        setStyleSheet("background-color: black;");
+
+        QVBoxLayout* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+
+        m_imageLabel = new QLabel();
+        m_imageLabel->setAlignment(Qt::AlignCenter);
+        m_imageLabel->setStyleSheet("QLabel { background-color: black; border: none; margin: 0px; padding: 0px; }");
+        m_imageLabel->setContentsMargins(0, 0, 0, 0);
+        m_imageLabel->setMargin(0);
+        layout->addWidget(m_imageLabel);
+        setLayout(layout);
+    }
+
+    void updateScaledImage() {
+        if (m_originalPixmap.isNull()) {
+            return;
+        }
+
+        const QSize targetSize = size();
+        if (targetSize.width() <= 0 || targetSize.height() <= 0) {
+            return;
+        }
+
+        // Fill the entire fullscreen surface and center-crop to avoid any borders.
+        QPixmap expanded = m_originalPixmap.scaled(
+            targetSize,
+            Qt::KeepAspectRatioByExpanding,
+            Qt::SmoothTransformation);
+
+        const int cropX = expanded.width() > targetSize.width()
+            ? (expanded.width() - targetSize.width()) / 2
+            : 0;
+        const int cropY = expanded.height() > targetSize.height()
+            ? (expanded.height() - targetSize.height()) / 2
+            : 0;
+
+        m_imageLabel->setPixmap(
+            expanded.copy(cropX, cropY, targetSize.width(), targetSize.height()));
     }
 
     void showMessage(const QString& message) {
@@ -160,8 +285,43 @@ private:
         }
     }
 
-    QString m_imagePath;
+    void saveCurrentImageAsWallpaper() {
+        if (m_originalPixmap.isNull()) {
+            QMessageBox::information(this, "Nothing to save",
+                                     "No image is currently available.");
+            return;
+        }
+
+        QString baseDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        if (baseDir.isEmpty()) {
+            baseDir = QDir::homePath();
+        }
+
+        QString defaultFilename = m_contentId.isEmpty() ? "pkgxtractor-wallpaper.png" : m_contentId + ".png";
+        const QString defaultPath = QDir(baseDir).filePath(defaultFilename);
+        const QString selectedPath = QFileDialog::getSaveFileName(
+            this,
+            "Save as wallpaper",
+            defaultPath,
+            "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg);;All Files (*)");
+
+        if (selectedPath.isEmpty()) {
+            return;
+        }
+
+        if (!m_originalPixmap.toImage().save(selectedPath)) {
+            QMessageBox::warning(this, "Save failed",
+                                 "Could not save wallpaper image.");
+            return;
+        }
+
+        QMessageBox::information(this, "Wallpaper saved",
+                                 "Saved to:\n" + selectedPath);
+    }
+
     QLabel* m_imageLabel;
+    QPixmap m_originalPixmap;
+    QString m_contentId;
 };
 
 // Custom clickable label for icon preview
@@ -170,7 +330,8 @@ class ClickableIconLabel : public QLabel {
 
 public:
     explicit ClickableIconLabel(QWidget* parent = nullptr)
-        : QLabel(parent), m_outputPath("") {
+        : QLabel(parent), m_outputPath(""), m_previewImagePath(""),
+          m_pkgPath(""), m_pkgLoaded(false) {
         setCursor(Qt::PointingHandCursor);
     }
 
@@ -178,35 +339,173 @@ public:
         m_outputPath = path;
     }
 
+    void setPreviewImagePath(const QString& path) {
+        m_previewImagePath = path;
+    }
+
+    void setPkgPath(const QString& path) {
+        m_pkgPath = path;
+    }
+
+    void setPkgLoaded(bool loaded) {
+        m_pkgLoaded = loaded;
+    }
+
 protected:
     void mousePressEvent(QMouseEvent* event) override {
         Q_UNUSED(event);
-        if (m_outputPath.isEmpty()) {
-            QMessageBox::information(this, "No PKG loaded",
-                                   "Please select a PKG file to preview pic0.png.");
+
+        if (!m_pkgLoaded && m_outputPath.isEmpty() && m_pkgPath.isEmpty()) {
+            QMessageBox::information(this, "No package loaded",
+                                     "Select a PKG file first.");
             return;
         }
 
-        QString pic0Path = m_outputPath + "/sce_sys/pic0.png";
-        if (!QFile::exists(pic0Path)) {
+        const QString previewPath = resolvePreviewImagePath();
+
+        if (previewPath.isEmpty() && !m_pkgPath.isEmpty()) {
+            try {
+                PKG pkg{};
+                std::string failreason;
+                if (OpenPkgWithRetry(pkg, Common::FS::PathFromQString(m_pkgPath), failreason,
+                                     2, 60)) {
+                    constexpr size_t kMaxPreviewSize = 64 * 1024 * 1024;
+                    for (const u32 entryId : {0x1220u, 0x1006u}) { // pic0.png, pic1.png
+                        std::vector<u8> imageData;
+                        std::string imageFail;
+                        if (!pkg.GetEntryDataById(entryId, imageData, imageFail) || imageData.empty()) {
+                            continue;
+                        }
+                        if (imageData.size() > kMaxPreviewSize) {
+                            continue;
+                        }
+
+                        QImage image;
+                        if (image.loadFromData(imageData.data(), static_cast<int>(imageData.size()), "PNG")) {
+                            if (m_activeViewer && m_activeViewer->isVisible()) {
+                                m_activeViewer->raise();
+                                m_activeViewer->activateWindow();
+                                return;
+                            }
+
+                            m_activeViewer = new FullScreenImageViewer(image);
+                            QString contentId = QString::fromStdString(std::string(pkg.GetContentID()));
+                            m_activeViewer->setContentId(contentId);
+                            connect(m_activeViewer, &QObject::destroyed, this,
+                                    [this]() { m_activeViewer = nullptr; });
+
+                            QScreen* targetScreen = nullptr;
+                            if (QWidget* topLevel = window()) {
+                                if (QWindow* sourceWindow = topLevel->windowHandle()) {
+                                    targetScreen = sourceWindow->screen();
+                                }
+                            }
+                            if (!targetScreen) {
+                                targetScreen = QGuiApplication::primaryScreen();
+                            }
+
+                            if (targetScreen) {
+                                m_activeViewer->winId();
+                                if (QWindow* viewerWindow = m_activeViewer->windowHandle()) {
+                                    viewerWindow->setScreen(targetScreen);
+                                }
+                                m_activeViewer->setGeometry(targetScreen->geometry());
+                            }
+
+                            m_activeViewer->showFullScreen();
+                            return;
+                        }
+                    }
+                }
+            } catch (...) {
+                // Fall through to message below.
+            }
+        }
+
+        if (previewPath.isEmpty()) {
             QMessageBox::information(this, "Image not found",
-                                   "pic0.png is not available for this PKG.");
+                                     "pic0.png or pic1.png is not available in this package.");
             return;
         }
 
-        FullScreenImageViewer* viewer = new FullScreenImageViewer(pic0Path);
-        viewer->showFullScreen();
+        if (m_activeViewer && m_activeViewer->isVisible()) {
+            m_activeViewer->raise();
+            m_activeViewer->activateWindow();
+            return;
+        }
+
+        m_activeViewer = new FullScreenImageViewer(previewPath);
+        
+        if (!m_pkgPath.isEmpty()) {
+            try {
+                PKG pkg{};
+                std::string failreason;
+                if (OpenPkgWithRetry(pkg, Common::FS::PathFromQString(m_pkgPath), failreason, 1, 30)) {
+                    QString contentId = QString::fromStdString(std::string(pkg.GetContentID()));
+                    m_activeViewer->setContentId(contentId);
+                }
+            } catch (...) {
+                // Content-id extraction failed, viewer will use default filename
+            }
+        }
+        
+        connect(m_activeViewer, &QObject::destroyed, this, [this]() { m_activeViewer = nullptr; });
+
+        QScreen* targetScreen = nullptr;
+        if (QWidget* topLevel = window()) {
+            if (QWindow* sourceWindow = topLevel->windowHandle()) {
+                targetScreen = sourceWindow->screen();
+            }
+        }
+        if (!targetScreen) {
+            targetScreen = QGuiApplication::primaryScreen();
+        }
+
+        if (targetScreen) {
+            m_activeViewer->winId();
+            if (QWindow* viewerWindow = m_activeViewer->windowHandle()) {
+                viewerWindow->setScreen(targetScreen);
+            }
+            m_activeViewer->setGeometry(targetScreen->geometry());
+        }
+
+        m_activeViewer->showFullScreen();
     }
 
 private:
+    QString resolvePreviewImagePath() const {
+        if (!m_previewImagePath.isEmpty() && QFileInfo::exists(m_previewImagePath)) {
+            return m_previewImagePath;
+        }
+
+        if (!m_outputPath.isEmpty()) {
+            const QString pic0Path = QDir(m_outputPath).filePath("sce_sys/pic0.png");
+            if (QFileInfo::exists(pic0Path)) {
+                return pic0Path;
+            }
+
+            const QString pic1Path = QDir(m_outputPath).filePath("sce_sys/pic1.png");
+            if (QFileInfo::exists(pic1Path)) {
+                return pic1Path;
+            }
+        }
+
+        return QString();
+    }
+
     QString m_outputPath;
+    QString m_previewImagePath;
+    QString m_pkgPath;
+    bool m_pkgLoaded;
+    QPointer<FullScreenImageViewer> m_activeViewer;
 };
 
 class ExtractionWorker : public QObject {
     Q_OBJECT
 
 public:
-    ExtractionWorker(const std::string& pkgPath, const std::string& outputPath,
+    ExtractionWorker(const std::filesystem::path& pkgPath,
+                                         const std::filesystem::path& outputPath,
                                          const QString& progressPath, bool previewOnly, bool salvageMode)
         : m_pkgPath(pkgPath), m_outputPath(outputPath), m_progressPath(progressPath),
                     m_previewOnly(previewOnly), m_salvageMode(salvageMode) {}
@@ -216,32 +515,34 @@ public slots:
         emit logMessage("=== Starting extraction ===");
         
         try {
-            std::filesystem::path file(m_pkgPath);
-            std::filesystem::path output_folder_path(m_outputPath);
+            const std::filesystem::path& file = m_pkgPath;
+            std::filesystem::path output_folder_path = m_outputPath;
 
-            emit logMessage(QString::fromStdString("Checking file: " + m_pkgPath));
+            const std::string pkgPathUtf8 = Common::FS::PathToUTF8String(file);
+
+            emit logMessage(QString::fromStdString("Checking file: " + pkgPathUtf8));
             
             if (!std::filesystem::exists(file)) {
-                emit logMessage(QString::fromStdString("Error: File does not exist: " + m_pkgPath));
+                emit logMessage(QString::fromStdString("Error: File does not exist: " + pkgPathUtf8));
                 emit finished();
                 return;
             }
 
             emit logMessage("Detecting file type...");
             if (Loader::DetectFileType(file) != Loader::FileTypes::Pkg) {
-                emit logMessage(QString::fromStdString("Error: " + m_pkgPath + " is not a valid PKG file"));
+                emit logMessage(QString::fromStdString("Error: " + pkgPathUtf8 + " is not a valid PKG file"));
                 emit finished();
                 return;
             }
 
-            emit logMessage(QString::fromStdString(m_pkgPath + " is a valid PKG"));
+            emit logMessage(QString::fromStdString(pkgPathUtf8 + " is a valid PKG"));
 
             emit logMessage("Initializing PKG extractor...");
             PKG pkg{};
             std::string failreason;
 
-            emit logMessage("Opening PKG file for SFO metadata...");
-            if (!pkg.Open(file, failreason)) {
+            emit logMessage("Opening PKG file...");
+            if (!OpenPkgWithRetry(pkg, file, failreason)) {
                 emit logMessage(QString::fromStdString("Cannot open PKG file: " + failreason));
                 emit finished();
                 return;
@@ -249,48 +550,13 @@ public slots:
 
             emit logMessage("PKG file opened successfully");
 
-            emit logMessage("Reading SFO metadata...");
-            emit logMessage(QString::fromStdString("SFO data size: " + std::to_string(pkg.sfo.size()) + " bytes"));
-            
-            PSF psf{};
-            emit logMessage("Parsing SFO...");
-            
-            try {
-                if (!psf.Open(pkg.sfo)) {
-                    emit logMessage("Error: psf.Open() returned false - Could not read SFO metadata");
-                    emit finished();
-                    return;
-                }
-            } catch (const std::exception& e) {
-                emit logMessage(QString::fromStdString("Exception in psf.Open(): " + std::string(e.what())));
-                emit finished();
-                return;
-            } catch (...) {
-                emit logMessage("Unknown exception in psf.Open()");
-                emit finished();
-                return;
-            }
+            emit logMessage("SFO logic disabled for stability test.");
 
-            emit logMessage("SFO read successfully");
-
-            emit logMessage("Reading title id for extraction folder...");
-
-            std::string folder_name;
-            auto title_id_data = psf.GetString("TITLE_ID");
-            if (title_id_data) {
-                folder_name = std::string(title_id_data.value());
-                folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'),
-                                  folder_name.end());
-                emit logMessage(QString::fromStdString("TITLE_ID from SFO: " + folder_name));
-            }
-
-            if (folder_name.empty()) {
-                folder_name = std::string(pkg.GetTitleID());
-                folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'),
-                                  folder_name.end());
-                emit logMessage(QString::fromStdString("TITLE_ID fallback from PKG header: " +
-                                                       folder_name));
-            }
+            std::string folder_name = std::string(pkg.GetTitleID());
+            folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'),
+                              folder_name.end());
+            emit logMessage(QString::fromStdString("Using TITLE_ID from PKG header: " +
+                                                   folder_name));
 
             if (folder_name.empty()) {
                 emit logMessage("Warning: TITLE_ID missing, using unknown_title");
@@ -305,6 +571,31 @@ public slots:
 
             emit logMessage("Creating TITLE_ID extraction subfolder...");
             output_folder_path = output_folder_path / sanitized_folder_name;
+
+            {
+                std::vector<std::string> sample_entries;
+                std::string guardrail_error;
+                if (DirectoryHasEntries(output_folder_path, sample_entries, guardrail_error)) {
+                    emit logMessage("Guardrail: target output folder is not empty.");
+                    emit logMessage(QString::fromStdString("Target folder: " + output_folder_path.string()));
+                    emit logMessage("For stability, each preview/extraction requires a new empty folder.");
+                    if (!guardrail_error.empty()) {
+                        emit logMessage(QString::fromStdString("Guardrail detail: " + guardrail_error));
+                    }
+                    if (!sample_entries.empty()) {
+                        std::string joined;
+                        for (size_t i = 0; i < sample_entries.size(); ++i) {
+                            if (i > 0) {
+                                joined += ", ";
+                            }
+                            joined += sample_entries[i];
+                        }
+                        emit logMessage(QString::fromStdString("Existing entries: " + joined));
+                    }
+                    emit finished();
+                    return;
+                }
+            }
 
             if (m_previewOnly) {
                 emit logMessage("Preview mode: reading PKG metadata...");
@@ -330,6 +621,9 @@ public slots:
                 
                 const u32 files_count = pkg.GetNumberOfFiles();
                 emit logMessage(QString::fromStdString("Preview: " + std::to_string(files_count) + " files in PKG"));
+                if (files_count == 0) {
+                    emit logMessage("Preview: no extractable outer PFS entries detected; package appears metadata-only.");
+                }
                 
                 emit logMessage("Exporting file list...");
                 auto filelist_path = output_folder_path / "filelist.txt";
@@ -376,6 +670,9 @@ public slots:
             emit logMessage("Getting file count from PKG...");
             const u32 files_count = pkg.GetNumberOfFiles();
             emit logMessage(QString::fromStdString("Total files to extract: " + std::to_string(files_count)));
+            if (files_count == 0) {
+                emit logMessage("No extractable outer PFS entries detected; extracted metadata/sce_sys only.");
+            }
             
             // Export file list for debugging (always to the real output path)
             emit logMessage("Exporting file list...");
@@ -394,27 +691,47 @@ public slots:
             emit logMessage("Starting file extraction loop...");
             u32 failed_files = 0;
             bool extraction_error = false;
+            bool aborted_early = false;
             std::vector<std::string> salvage_skipped_entries;
             std::vector<std::string> extraction_error_entries;
             for (u32 index = 0; index < files_count; ++index) {
                 writeProgressCheckpoint(index + 1, files_count);
+                
+                // Add file boundary message at every 100 files for debugging
+                if (index % 100 == 0 && index > 0) {
+                    emit logMessage(QString::fromStdString("[BOUNDARY] Processed " + std::to_string(index) + " files successfully"));
+                }
+                
                 emit logMessage(QString::fromStdString("Extracting file " + std::to_string(index + 1) + "/" + std::to_string(files_count)));
 
-                if (m_salvageMode) {
-                    std::string preflight_reason;
-                    if (!pkg.CanExtractFile(static_cast<int>(index), preflight_reason)) {
-                        failed_files++;
-                        extraction_error = true;
+                std::string preflight_reason;
+                if (!pkg.CanExtractFile(static_cast<int>(index), preflight_reason)) {
+                    failed_files++;
+                    extraction_error = true;
+
+                    const std::string preflight_msg =
+                        "Preflight failed for file " + std::to_string(index + 1) +
+                        " (" + preflight_reason + ")";
+                    extraction_error_entries.push_back(preflight_msg);
+                    emit logMessage(QString::fromStdString(preflight_msg));
+
+                    if (m_salvageMode) {
                         const std::string skip_msg =
                             "Salvage: skipping file " + std::to_string(index + 1) +
                             " due to invalid metadata (" + preflight_reason + ")";
                         salvage_skipped_entries.push_back(skip_msg);
-                        extraction_error_entries.push_back(skip_msg);
                         emit logMessage(QString::fromStdString(skip_msg));
                         emit updateProgress(index + 1);
                         QThread::msleep(1);
                         continue;
                     }
+
+                    emit logMessage(
+                        "Aborting extraction in normal mode due to invalid metadata. "
+                        "Enable Salvage Mode to skip bad entries.");
+                    emit updateProgress(index + 1);
+                    aborted_early = true;
+                    break;
                 }
 
                 try {
@@ -441,7 +758,9 @@ public slots:
                 QThread::msleep(1);  // Allow UI to update
             }
 
-            if (failed_files == 0) {
+            if (aborted_early) {
+                    emit logMessage("=== Extraction aborted early due to invalid metadata ===");
+                } else if (failed_files == 0) {
                     emit logMessage("=== Extraction complete! ===");
                 } else {
                     emit logMessage(QString::fromStdString("=== Extraction finished with " + std::to_string(failed_files) + " file errors ==="));
@@ -470,7 +789,7 @@ public slots:
                     if (report.is_open()) {
                         report << "PkgXtractor Extraction Error Report\n";
                         report << "================================\n";
-                        report << "PKG: " << m_pkgPath << "\n";
+                        report << "PKG: " << Common::FS::PathToUTF8String(m_pkgPath) << "\n";
                         report << "Mode: " << (m_salvageMode ? "salvage" : "normal") << "\n";
                         report << "Total files: " << files_count << "\n";
                         report << "Error entries: " << extraction_error_entries.size() << "\n\n";
@@ -490,7 +809,7 @@ public slots:
                     if (report.is_open()) {
                         report << "PkgXtractor Salvage Report\n";
                         report << "========================\n";
-                        report << "PKG: " << m_pkgPath << "\n";
+                        report << "PKG: " << Common::FS::PathToUTF8String(m_pkgPath) << "\n";
                         report << "Skipped entries: " << salvage_skipped_entries.size() << "\n\n";
                         for (const auto& line : salvage_skipped_entries) {
                             report << line << "\n";
@@ -502,24 +821,23 @@ public slots:
                     }
                 }
             
-                // Only try to open folder if extraction had no errors to avoid crashes
+                // Signal the main window to open the folder if extraction succeeded
                 if (!extraction_error) {
-                    emit logMessage("Opening destination folder...");
                     try {
                         std::filesystem::path folder_path(output_folder_path);
-                        // Verify the path exists before opening
                         if (std::filesystem::exists(folder_path)) {
-                            QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(folder_path.string())));
+                            // Convert to QString and emit signal for main window to handle
+                            QString folderPathStr;
+                            Common::FS::PathToQString(folderPathStr, folder_path);
+                            emit openFolder(folderPathStr);
                         } else {
                             emit logMessage("Warning: Output folder path does not exist");
                         }
                     } catch (const std::exception& e) {
-                        emit logMessage(QString::fromStdString("Warning: Could not open folder: " + std::string(e.what())));
+                        emit logMessage(QString::fromStdString("Warning: Could not prepare folder path: " + std::string(e.what())));
                     } catch (...) {
-                        emit logMessage("Warning: Could not open folder (unknown error)");
+                        emit logMessage("Warning: Could not prepare folder path (unknown error)");
                     }
-                } else {
-                    emit logMessage("Skipping folder open due to extraction errors");
                 }
             
             clearProgressCheckpoint();
@@ -543,6 +861,7 @@ signals:
     void updateProgress(int value);
     void setMaxProgress(int max);
     void finished();
+    void openFolder(const QString& folderPath);
 
 private:
     void writeProgressCheckpoint(const u32 current, const u32 total) {
@@ -550,12 +869,15 @@ private:
             return;
         }
 
+        QString pkgPathQt;
+        Common::FS::PathToQString(pkgPathQt, m_pkgPath);
+
         QFile progressFile(m_progressPath);
         if (progressFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
             QTextStream stream(&progressFile);
             stream << "current=" << current << "\n";
             stream << "total=" << total << "\n";
-            stream << "pkg=" << QString::fromStdString(m_pkgPath) << "\n";
+            stream << "pkg=" << pkgPathQt << "\n";
             stream << "timestamp=" << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
                    << "\n";
             stream.flush();
@@ -568,8 +890,8 @@ private:
         }
     }
 
-    std::string m_pkgPath;
-    std::string m_outputPath;
+    std::filesystem::path m_pkgPath;
+    std::filesystem::path m_outputPath;
     QString m_progressPath;
     bool m_previewOnly = false;
     bool m_salvageMode = false;
@@ -580,8 +902,30 @@ class PkgXtractorWindow : public QMainWindow {
 
 public:
     PkgXtractorWindow() : QMainWindow() {
-        setWindowTitle("pkgxtractor-qt");
+        // Format build timestamp from compile-time macros
+        auto formatBuildDate = []() -> QString {
+            QString date = __DATE__;  // "Mar  9 2026"
+            QString time = __TIME__;  // "15:37:58"
+            
+            QMap<QString, QString> months = {
+                {"Jan", "01"}, {"Feb", "02"}, {"Mar", "03"}, {"Apr", "04"},
+                {"May", "05"}, {"Jun", "06"}, {"Jul", "07"}, {"Aug", "08"},
+                {"Sep", "09"}, {"Oct", "10"}, {"Nov", "11"}, {"Dec", "12"}
+            };
+            
+            QStringList parts = date.simplified().split(' ');
+            if (parts.size() == 3) {
+                QString month = months.value(parts[0], "00");
+                QString day = parts[1].rightJustified(2, '0');
+                QString year = parts[2];
+                return QString("build: %1-%2-%3 %4").arg(year).arg(month).arg(day).arg(time.toLower());
+            }
+            return QString("build: %1 %2").arg(date).arg(time).toLower();
+        };
+        
+        setWindowTitle(QString("pkgxtractor-qt - %1 - RT").arg(formatBuildDate()));
         setGeometry(100, 100, 700, 600);
+        setFixedSize(700, 600);
         setAcceptDrops(true);
 
         // Open log file next to executable
@@ -658,6 +1002,10 @@ public:
         connect(browseBtn, &QPushButton::clicked, this, &PkgXtractorWindow::onBrowsePkg);
         pkgLayout->addWidget(browseBtn);
 
+        m_renamePkgBtn = new QPushButton("Rename to CONTENT_ID");
+        connect(m_renamePkgBtn, &QPushButton::clicked, this, &PkgXtractorWindow::onRenamePkgToContentId);
+        pkgLayout->addWidget(m_renamePkgBtn);
+
         // Output Folder Selection
         QHBoxLayout* outputLayout = new QHBoxLayout();
         mainLayout->addLayout(outputLayout);
@@ -680,17 +1028,20 @@ public:
         m_sfoPreview = new QTextEdit();
         m_sfoPreview->setReadOnly(true);
         m_sfoPreview->setPlaceholderText("Select a PKG file to preview param.sfo metadata...");
-        m_sfoPreview->setMaximumHeight(200);
+        m_sfoPreview->setMaximumHeight(220);
+        m_sfoPreview->setStyleSheet("QTextEdit { border: none; }");
+        m_sfoPreview->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         sfoLayout->addWidget(m_sfoPreview);
+        sfoLayout->addStretch();  // Push content to top, not centered
         previewLayout->addLayout(sfoLayout, 3);
 
         QVBoxLayout* iconLayout = new QVBoxLayout();
-        iconLayout->addWidget(new QLabel("icon0.png Preview (click):"));
+        iconLayout->addWidget(new QLabel("icon preview (click)"));
         m_iconPreview = new ClickableIconLabel();
         m_iconPreview->setFixedSize(200, 200);
         m_iconPreview->setAlignment(Qt::AlignCenter);
-        m_iconPreview->setStyleSheet("QLabel { border: 1px solid #666; background: #111; cursor: pointer; }");
-        m_iconPreview->setText("No icon");
+        m_iconPreview->setStyleSheet("QLabel { border: none; background: #111; }");
+        showFallbackLogo();
         iconLayout->addWidget(m_iconPreview);
         iconLayout->addStretch();
         previewLayout->addLayout(iconLayout, 1);
@@ -720,9 +1071,10 @@ public:
         mainLayout->addLayout(actionLayout);
 
         // Log Area
-        mainLayout->addWidget(new QLabel("Log:"));
         m_logOutput = new QTextEdit();
         m_logOutput->setReadOnly(true);
+        m_logOutput->setStyleSheet("QTextEdit { border: none; }");
+        m_logOutput->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         mainLayout->addWidget(m_logOutput);
 
         centralWidget->setLayout(mainLayout);
@@ -749,8 +1101,9 @@ protected:
 
 private slots:
     void onBrowsePkg() {
-        QString fileFilter = "PKG Files (*.pkg);;All Files (*)";
-        QString fileName = QFileDialog::getOpenFileName(this, "Select PKG File", "", fileFilter);
+        QString fileName = QFileDialog::getOpenFileName(
+            this, "Select PKG File", QString(),
+            "PKG Files (*.pkg *.PKG);;All Files (*)");
         if (!fileName.isEmpty()) {
             m_pkgPathInput->setText(fileName);
             updateSfoPreview(fileName);
@@ -778,14 +1131,15 @@ private slots:
         m_extractBtn->setEnabled(false);
         m_previewBtn->setEnabled(false);
         m_compareBtn->setEnabled(false);
+        m_renamePkgBtn->setEnabled(false);
         m_progressBar->setEnabled(true);
         m_progressBar->setValue(0);
         m_logOutput->clear();
 
         QThread* thread = new QThread();
         ExtractionWorker* worker = new ExtractionWorker(
-            m_pkgPathInput->text().toStdString(),
-            m_outputPathInput->text().toStdString(),
+            Common::FS::PathFromQString(m_pkgPathInput->text()),
+            Common::FS::PathFromQString(m_outputPathInput->text()),
             m_progressPath,
             previewOnly,
             m_salvageCheck->isChecked());
@@ -796,6 +1150,15 @@ private slots:
         connect(worker, &ExtractionWorker::logMessage, this, &PkgXtractorWindow::onLog);
         connect(worker, &ExtractionWorker::updateProgress, m_progressBar, &QProgressBar::setValue);
         connect(worker, &ExtractionWorker::setMaxProgress, m_progressBar, &QProgressBar::setMaximum);
+        connect(worker, &ExtractionWorker::openFolder, this, [](const QString& folderPath) {
+            try {
+                if (!folderPath.isEmpty()) {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(folderPath));
+                }
+            } catch (...) {
+                // Silently ignore folder opening errors
+            }
+        }, Qt::QueuedConnection);
         connect(worker, &ExtractionWorker::finished, thread, &QThread::quit);
         connect(worker, &ExtractionWorker::finished, worker, &QObject::deleteLater);
         connect(thread, &QThread::finished, thread, &QObject::deleteLater);
@@ -803,6 +1166,7 @@ private slots:
             m_extractBtn->setEnabled(true);
             m_previewBtn->setEnabled(true);
             m_compareBtn->setEnabled(true);
+            m_renamePkgBtn->setEnabled(true);
             m_salvageCheck->setEnabled(true);
             m_progressBar->setEnabled(false);
         });
@@ -929,6 +1293,128 @@ private slots:
         startWorker(true);
     }
 
+    void onRenamePkgToContentId() {
+        const QString currentPath = m_pkgPathInput->text().trimmed();
+        if (currentPath.isEmpty()) {
+            QMessageBox::warning(this, "Rename PKG", "Please select a PKG file first.");
+            return;
+        }
+
+        const std::filesystem::path pkgPath = Common::FS::PathFromQString(currentPath);
+        if (!std::filesystem::exists(pkgPath)) {
+            QMessageBox::warning(this, "Rename PKG", "Selected PKG file does not exist.");
+            return;
+        }
+
+        if (Loader::DetectFileType(pkgPath) != Loader::FileTypes::Pkg) {
+            QMessageBox::warning(this, "Rename PKG", "Selected file is not a valid PKG.");
+            return;
+        }
+
+        // Extract rename fields in nested scope so file gets closed before rename
+        QString contentIdQt;
+        QString targetBaseName;
+        QString targetScheme = "CONTENT_ID";
+        {
+            PKG pkg{};
+            std::string failreason;
+            if (!OpenPkgWithRetry(pkg, pkgPath, failreason, 2, 60)) {
+                QMessageBox::warning(
+                    this, "Rename PKG",
+                    QString::fromStdString("Failed to open PKG: " + failreason));
+                return;
+            }
+
+            // Read CONTENT_ID from PKG header (36-byte field at offset 0x40)
+            std::string contentId(pkg.GetContentID());
+            contentId.erase(std::remove(contentId.begin(), contentId.end(), '\0'), contentId.end());
+            contentIdQt = QString::fromStdString(contentId).trimmed();
+            
+            if (contentIdQt.isEmpty()) {
+                QMessageBox::warning(this, "Rename PKG", "CONTENT_ID is empty or not found in PKG header.");
+                return;
+            }
+
+            targetBaseName = contentIdQt;
+
+            // For game packages, append normalized APP_VER (01.00 -> 0100).
+            // DLC/content packages (CATEGORY=AC) usually don't carry APP_VER and keep CONTENT_ID only.
+            if (!pkg.sfo.empty()) {
+                PSF psf{};
+                if (psf.Open(pkg.sfo)) {
+                    QString categoryQt;
+                    if (auto categoryValue = psf.GetString("CATEGORY"); categoryValue) {
+                        std::string category(categoryValue.value());
+                        category.erase(std::remove(category.begin(), category.end(), '\0'),
+                                       category.end());
+                        categoryQt = QString::fromStdString(category).trimmed().toUpper();
+                    }
+
+                    const bool isAddOnContent = (categoryQt == "AC") || categoryQt.startsWith("AC ");
+                    if (!isAddOnContent) {
+                        QString appVerQt;
+                        if (auto appVerValue = psf.GetString("APP_VER"); appVerValue) {
+                            std::string appVer(appVerValue.value());
+                            appVer.erase(std::remove(appVer.begin(), appVer.end(), '\0'),
+                                         appVer.end());
+                            appVerQt = QString::fromStdString(appVer).trimmed();
+                            appVerQt.remove('.');
+                        }
+
+                        if (!appVerQt.isEmpty()) {
+                            targetBaseName = contentIdQt + "-" + appVerQt;
+                            targetScheme = "CONTENT_ID-APP_VER";
+                        }
+                    }
+                }
+            }
+        } // PKG destructor called here - file is now closed
+
+        QString extension;
+        Common::FS::PathToQString(extension, pkgPath.extension());
+        if (extension.isEmpty()) {
+            extension = ".pkg";
+        }
+
+        QString parentDir;
+        Common::FS::PathToQString(parentDir, pkgPath.parent_path());
+        const QString targetPath = QDir(parentDir).filePath(targetBaseName + extension);
+
+        Qt::CaseSensitivity pathCase = Qt::CaseSensitive;
+#ifdef _WIN32
+        pathCase = Qt::CaseInsensitive;
+#endif
+        if (QString::compare(QFileInfo(currentPath).absoluteFilePath(),
+                             QFileInfo(targetPath).absoluteFilePath(),
+                             pathCase) == 0) {
+            QMessageBox::information(this, "Rename PKG",
+                                     "PKG is already named after " + targetScheme + ".");
+            return;
+        }
+
+        if (QFileInfo::exists(targetPath)) {
+            QMessageBox::warning(this, "Rename PKG",
+                                 "A file with that " + targetScheme + " name already exists in this folder.");
+            return;
+        }
+
+        const std::filesystem::path targetFsPath = Common::FS::PathFromQString(targetPath);
+        std::error_code renameEc;
+        std::filesystem::rename(pkgPath, targetFsPath, renameEc);
+        if (renameEc) {
+            QMessageBox::warning(
+                this, "Rename PKG",
+                QString::fromStdString(
+                    "Failed to rename file: " + renameEc.message() +
+                    ". Ensure it is not in use and you have write permission."));
+            return;
+        }
+
+        m_pkgPathInput->setText(targetPath);
+        m_iconPreview->setPkgPath(targetPath);
+        onLog("Renamed PKG to " + targetScheme + ": " + targetPath);
+    }
+
     void onLog(const QString& msg) {
         m_logOutput->append(msg);
         
@@ -940,174 +1426,152 @@ private slots:
     }
 
     void updateSfoPreview(const QString& pkgPath) {
+        onLog("Preview: loading icon metadata for " + pkgPath);
         m_sfoPreview->clear();
-        m_iconPreview->setPixmap(QPixmap());
-        m_iconPreview->setText("No icon");
+        showFallbackLogo();
+        m_iconPreview->setPkgPath(pkgPath);
+        m_iconPreview->setPkgLoaded(false);
+        m_iconPreview->setOutputPath("");
+        m_iconPreview->setPreviewImagePath("");
 
-        auto mapCategory = [](QString categoryCode) -> QString {
-            const QString code = categoryCode.trimmed().toUpper();
-            if (code == "DG" || code == "GD") return "DG Disc Game (Blu-ray)";
-            if (code == "GP") return "GP Game Patch";
-            if (code == "AC") return "AC Add-on Content (DLC)";
-            if (code == "HG") return "HG HDD Game";
-            if (code == "EG") return "EG External Game";
-            if (code == "UP") return "UP Application Update";
-            return code.isEmpty() ? "-" : QString("%1 (Unknown)").arg(code);
+        auto sanitizeText = [](QString value) -> QString {
+            value.remove(QChar('\0'));
+            value = value.trimmed();
+            return value.isEmpty() ? QString("not available") : value;
         };
+
+        auto buildPreviewText = [](const QString& category, const QString& contentId,
+                                   const QString& title, const QString& titleId,
+                                   const QString& version) {
+            return QString("CATEGORY: %1\n"
+                           "CONTENT_ID: %2\n"
+                           "TITLE: %3\n"
+                           "TITLE_ID: %4\n"
+                           "VERSION: %5")
+                .arg(category, contentId, title, titleId, version);
+        };
+
+        QString category = "not available";
+        QString contentId = "not available";
+        QString title = "not available";
+        QString titleId = "not available";
+        QString version = "not available";
+
+        if (pkgPath.isEmpty()) {
+            m_sfoPreview->setPlainText(
+                buildPreviewText(category, contentId, title, titleId, version));
+            return;
+        }
 
         try {
             PKG pkg{};
             std::string failreason;
-            if (!pkg.Open(std::filesystem::path(pkgPath.toStdString()), failreason)) {
-                m_sfoPreview->setPlainText(QString::fromStdString("Failed to open PKG: " + failreason));
+            if (!OpenPkgWithRetry(pkg, Common::FS::PathFromQString(pkgPath), failreason, 2, 60)) {
+                onLog(QString::fromStdString("Preview: failed to open PKG for icon: " + failreason));
+                m_sfoPreview->setPlainText(
+                    buildPreviewText(category, contentId, title, titleId, version));
                 return;
             }
 
-            if (pkg.sfo.empty()) {
-                m_sfoPreview->setPlainText("No param.sfo found in PKG.");
-            } else {
-                PSF psf{};
-                if (!psf.Open(pkg.sfo)) {
-                    m_sfoPreview->setPlainText("Failed to parse param.sfo.");
-                } else {
-                    auto getStr = [&](const char* key) -> QString {
-                        auto value = psf.GetString(key);
-                        if (!value) {
-                            return "-";
-                        }
-                        std::string text(value.value());
-                        text.erase(std::remove(text.begin(), text.end(), '\0'), text.end());
-                        return QString::fromStdString(text);
-                    };
+            m_iconPreview->setPkgLoaded(true);
 
-                    auto getInt = [&](const char* key) -> QString {
-                        auto value = psf.GetInteger(key);
-                        return value ? QString::number(value.value()) : QString("-");
-                    };
-
-                    QString categoryCode = getStr("CATEGORY");
-                    QString parental = getInt("PARENTAL_LEVEL");
-                    if (parental == "-") {
-                        parental = getInt("PARENTAL_CONTROL");
-                    }
-
-                    QString titleId = getStr("TITLE_ID");
-
-                    QString preview;
-                    preview += "TITLE_ID: " + titleId + "\n";
-                    preview += "TITLE: " + getStr("TITLE") + "\n";
-                    preview += "CONTENT_ID: " + getStr("CONTENT_ID") + "\n";
-                    preview += "APP_VER: " + getStr("APP_VER") + "\n";
-                    preview += "VERSION: " + getStr("VERSION") + "\n";
-                    preview += "CATEGORY: " + mapCategory(categoryCode) + "\n";
-                    preview += "PARENTAL_LEVEL: " + parental + "\n";
-                    preview += "CONTENT_TYPE: " + getInt("CONTENT_TYPE") + "\n";
-                    m_sfoPreview->setPlainText(preview);
-
-                    // Set the output path for the icon label so it knows where to look for pic0.png
-                    QString outputPath = m_outputPathInput->text();
-                    if (!outputPath.isEmpty() && !titleId.isEmpty()) {
-                        // Sanitize folder name (same as in extraction code)
-                        std::string titleIdStr = titleId.toStdString();
-                        std::string sanitized = SanitizeFolderName(titleIdStr) + "_" + titleIdStr;
-                        QString fullOutputPath = outputPath + "/" + QString::fromStdString(sanitized);
-                        m_iconPreview->setOutputPath(fullOutputPath);
-                    }
-                }
-            }
-
-            // Extract pic0.png to temp location for immediate preview
-            // The correct entry ID for pic0.png is 0x1220 (verified in pkg_type.cpp)
-            std::vector<u32> pic0_entry_ids = {
-                0x1220, // CORRECT: pic0.png (verified in pkg_type.cpp)
-                0x12A0, // FALLBACK: pic0.dds (variant)
-                // Legacy/uncommon IDs in case some PKGs use different layouts
-                0x1700, 0x1C00, 0x1701, 0x1702, 0x1703, 0x1704, 0x1705,
-                0x1C01, 0x1C02, 0x1C03, 0x1800, 0x1801, 0x1802,
-                0x1600, 0x1601, 0x1602, 0x1603,
-                0x1300, 0x1400, 0x1500,
-                0x0800, 0x0900, 0x0A00, 0x0B00,
-                0x1900, 0x1A00, 0x1B00
-            };
-            
-            std::vector<u8> pic0Data;
-            std::string pic0Fail;
-            bool pic0Found = false;
-            
-            // Try to find pic0.png by checking for PNG magic in common locations
-            for (u32 entry_id : pic0_entry_ids) {
-                pic0Data.clear();
-                pic0Fail.clear();
-                
-                if (pkg.GetEntryDataById(entry_id, pic0Data, pic0Fail)) {
-                    if (!pic0Data.empty() && pic0Data.size() >= 4) {
-                        // Verify it's a valid PNG file (starts with PNG signature: 89 50 4E 47)
-                        if (pic0Data[0] == 0x89 && pic0Data[1] == 0x50 && 
-                            pic0Data[2] == 0x4E && pic0Data[3] == 0x47) {
-                            pic0Found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if (pic0Found && !pic0Data.empty()) {
-                // Create temp directory for pic0
-                std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "pkgxtractor_pic0";
-                try {
-                    std::filesystem::create_directories(tempDir);
-                    std::filesystem::path sce_sys_dir = tempDir / "sce_sys";
-                    std::filesystem::create_directories(sce_sys_dir);
-                    std::filesystem::path pic0Path = sce_sys_dir / "pic0.png";
-                    
-                    // Write pic0.png to temp location
-                    std::ofstream pic0File(pic0Path, std::ios::binary);
-                    if (pic0File.is_open()) {
-                        pic0File.write(reinterpret_cast<const char*>(pic0Data.data()), pic0Data.size());
-                        pic0File.close();
-                        
-                        // Verify file was written correctly
-                        if (std::filesystem::exists(pic0Path)) {
-                            u64 fileSize = std::filesystem::file_size(pic0Path);
-                            if (fileSize == pic0Data.size()) {
-                                // Successfully written - update path to temp directory
-                                m_iconPreview->setOutputPath(QString::fromStdString(tempDir.string()));
-                            }
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    // Silently fail - pic0.png will be unavailable
-                }
+            QString outputRoot = m_outputPathInput->text().trimmed();
+            std::string headerTitleId = std::string(pkg.GetTitleID());
+            headerTitleId.erase(std::remove(headerTitleId.begin(), headerTitleId.end(), '\0'),
+                                headerTitleId.end());
+            if (!outputRoot.isEmpty() && !headerTitleId.empty()) {
+                const std::string sanitizedTitleId = SanitizeFolderName(headerTitleId);
+                const QString fullOutputPath =
+                    QDir(outputRoot).filePath(QString::fromStdString(sanitizedTitleId));
+                m_iconPreview->setOutputPath(fullOutputPath);
             }
 
             std::vector<u8> iconData;
             std::string iconFail;
             if (pkg.GetEntryDataById(0x1200, iconData, iconFail) && !iconData.empty()) {
-                QImage image;
-                if (image.loadFromData(iconData.data(), static_cast<int>(iconData.size()), "PNG")) {
-                    QPixmap pix = QPixmap::fromImage(image).scaled(
-                        m_iconPreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                    m_iconPreview->setPixmap(pix);
-                    m_iconPreview->setText("");
+                constexpr size_t kMaxIconSize = 32 * 1024 * 1024;
+                if (iconData.size() <= kMaxIconSize) {
+                    QImage image;
+                    if (image.loadFromData(iconData.data(), static_cast<int>(iconData.size()), "PNG")) {
+                        QPixmap pix = QPixmap::fromImage(image).scaled(
+                            m_iconPreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                        m_iconPreview->setPixmap(pix);
+                        m_iconPreview->setText("");
+                        m_iconPreview->setPkgLoaded(true);
+                        onLog("Preview: icon0.png loaded");
+                    } else {
+                        onLog("Preview: icon0.png invalid, using fallback logo");
+                    }
                 } else {
-                    m_iconPreview->setText("Invalid icon0.png");
+                    onLog("Preview: icon0.png too large, using fallback logo");
                 }
             } else {
-                m_iconPreview->setText("icon0.png not found");
+                onLog("Preview: icon0.png not found, using fallback logo");
+            }
+
+            if (!pkg.sfo.empty()) {
+                PSF psf{};
+                if (psf.Open(pkg.sfo)) {
+                    auto readSfoString = [&](const char* key) {
+                        if (auto value = psf.GetString(key); value) {
+                            return sanitizeText(
+                                QString::fromStdString(std::string(value.value())));
+                        }
+                        return QString("not available");
+                    };
+
+                    category = readSfoString("CATEGORY");
+                    contentId = readSfoString("CONTENT_ID");
+                    title = readSfoString("TITLE");
+                    titleId = readSfoString("TITLE_ID");
+                    version = readSfoString("VERSION");
+                    onLog("Preview: SFO metadata loaded (5-key view)");
+                } else {
+                    onLog("Preview: failed to parse param.sfo, using fallback values");
+                }
+            } else {
+                onLog("Preview: param.sfo missing, using fallback values");
+            }
+
+            if (contentId == "not available") {
+                contentId = sanitizeText(QString::fromStdString(std::string(pkg.GetContentID())));
+            }
+            if (titleId == "not available") {
+                titleId = sanitizeText(QString::fromStdString(std::string(pkg.GetTitleID())));
             }
         } catch (const std::exception& e) {
-            m_sfoPreview->setPlainText(QString::fromStdString("SFO preview error: " + std::string(e.what())));
+            onLog(QString::fromStdString("Preview: icon load exception: " + std::string(e.what())));
         } catch (...) {
-            m_sfoPreview->setPlainText("SFO preview error: unknown exception");
+            onLog("Preview: icon load unknown exception");
         }
+
+        m_sfoPreview->setPlainText(
+            buildPreviewText(category, contentId, title, titleId, version));
     }
 
 private:
+    void showFallbackLogo() {
+        // Load embedded icon from Qt resources
+        QPixmap logoPixmap(":/icon.png");
+        if (!logoPixmap.isNull()) {
+            QPixmap scaled = logoPixmap.scaled(
+                m_iconPreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            m_iconPreview->setPixmap(scaled);
+            m_iconPreview->setText("");
+            return;
+        }
+
+        // Fallback if resource not found
+        m_iconPreview->setPixmap(QPixmap());
+        m_iconPreview->setText("No icon");
+    }
+
     QLineEdit* m_pkgPathInput;
     QLineEdit* m_outputPathInput;
     QPushButton* m_extractBtn;
     QPushButton* m_previewBtn;
     QPushButton* m_compareBtn;
+    QPushButton* m_renamePkgBtn;
     QCheckBox* m_salvageCheck;
     QProgressBar* m_progressBar;
     QTextEdit* m_logOutput;

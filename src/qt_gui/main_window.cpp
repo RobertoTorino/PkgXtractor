@@ -1014,7 +1014,6 @@ void MainWindow::BootGame() {
 void MainWindow::InstallDragDropPkg(std::filesystem::path file, int pkgNum, int nPkg) {
     if (Loader::DetectFileType(file) == Loader::FileTypes::Pkg) {
         std::string failreason;
-        pkg = PKG();
         if (!pkg.Open(file, failreason)) {
             QMessageBox::critical(this, tr("PKG ERROR"), QString::fromStdString(failreason));
             return;

@@ -65,5 +65,5 @@ private:
     bool is_game_saving = false;
 
     std::shared_ptr<gui_settings> m_gui_settings;
-    QFuture<void> Polling;
+    QTimer* sdlEventTimer = nullptr;
 };

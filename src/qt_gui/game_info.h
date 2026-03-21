@@ -71,6 +71,7 @@ public:
                 content_id.has_value() && !content_id->empty()) {
                 game.region = GameListUtils::GetRegion(content_id->at(0)).toStdString();
             }
+            game.fw = "not available";
             if (const auto fw_int_opt = psf.GetInteger("SYSTEM_VER"); fw_int_opt.has_value()) {
                 auto fw_int = *fw_int_opt;
                 if (fw_int == 0) {

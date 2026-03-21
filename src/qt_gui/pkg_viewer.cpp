@@ -125,7 +125,7 @@ void PKGViewer::ProcessPKGInfo() {
             }
         }
 
-        QString fw_ = tr("Unknown");
+        QString fw_ = tr("not available");
         if (const auto fw_int_opt = psf.GetInteger("SYSTEM_VER"); fw_int_opt.has_value()) {
             const u32 fw_int = *fw_int_opt;
             if (fw_int == 0) {

@@ -35,6 +35,7 @@ file(GLOB PKGXTRACTOR_LOADER_SOURCES
 # Qt GUI PkgXtractor executable using the stable gui.cpp
 add_executable(PkgXtractor-qt
     "${CMAKE_CURRENT_SOURCE_DIR}/../pkgxtractor/gui.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources.qrc"
     ${PKGXTRACTOR_SOURCES}
     ${PKGXTRACTOR_COMMON_SOURCES}
     ${PKGXTRACTOR_LOADER_SOURCES}

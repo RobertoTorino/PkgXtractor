@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <QDialog>
+#include <QTimer>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gamepad.h>
 #include "game_info.h"
@@ -67,7 +68,7 @@ private:
     SDL_Gamepad* gamepad = nullptr;
     SDL_JoystickID* gamepads;
     SdlEventWrapper::Wrapper* RemapWrapper;
-    QFuture<void> Polling;
+    QTimer* sdlEventTimer = nullptr;
 
     const std::vector<std::string> ControllerInputs = {
         "cross",        "circle",    "square",      "triangle",    "l1",

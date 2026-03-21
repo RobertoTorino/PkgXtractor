@@ -44,7 +44,13 @@ bool PSF::Open(const std::filesystem::path& filepath) {
 }
 
 bool PSF::Open(const std::vector<u8>& psf_buffer) {
+    if (psf_buffer.size() < sizeof(PSFHeader)) {
+        LOG_ERROR(Core, "PSF buffer too small");
+        return false;
+    }
+
     const u8* psf_data = psf_buffer.data();
+    const size_t psf_size = psf_buffer.size();
 
     entry_list.clear();
     map_binaries.clear();
@@ -64,35 +70,91 @@ bool PSF::Open(const std::vector<u8>& psf_buffer) {
         return false;
     }
 
+    const u64 index_table_bytes = static_cast<u64>(header.index_table_entries) * sizeof(PSFRawEntry);
+    const u64 index_table_end = static_cast<u64>(sizeof(PSFHeader)) + index_table_bytes;
+    if (index_table_end > psf_size) {
+        LOG_ERROR(Core, "PSF index table out of bounds");
+        return false;
+    }
+
+    if (header.key_table_offset >= psf_size || header.data_table_offset > psf_size ||
+        header.key_table_offset > header.data_table_offset) {
+        LOG_ERROR(Core, "PSF table offsets out of bounds");
+        return false;
+    }
+
+    const size_t key_table_start = static_cast<size_t>(header.key_table_offset);
+    const size_t key_table_end = static_cast<size_t>(header.data_table_offset);
+
     for (u32 i = 0; i < header.index_table_entries; i++) {
+        const size_t raw_entry_offset = sizeof(PSFHeader) + static_cast<size_t>(i) * sizeof(PSFRawEntry);
+        if (raw_entry_offset + sizeof(PSFRawEntry) > psf_size) {
+            LOG_ERROR(Core, "PSF raw entry {} out of bounds", i);
+            return false;
+        }
+
         PSFRawEntry raw_entry{};
-        std::memcpy(&raw_entry, psf_data + sizeof(PSFHeader) + i * sizeof(PSFRawEntry),
-                    sizeof(raw_entry));
+        std::memcpy(&raw_entry, psf_data + raw_entry_offset, sizeof(raw_entry));
+
+        const u64 key_start64 = static_cast<u64>(key_table_start) + raw_entry.key_offset;
+        if (key_start64 >= key_table_end) {
+            LOG_ERROR(Core, "PSF key offset out of bounds for entry {}", i);
+            return false;
+        }
+
+        const size_t key_start = static_cast<size_t>(key_start64);
+        const size_t key_search_len = key_table_end - key_start;
+        const void* key_null = std::memchr(psf_data + key_start, '\0', key_search_len);
+        if (!key_null) {
+            LOG_ERROR(Core, "PSF key missing terminator for entry {}", i);
+            return false;
+        }
+
+        const auto* key_begin = reinterpret_cast<const char*>(psf_data + key_start);
+        const auto* key_end = reinterpret_cast<const char*>(key_null);
+
+        const u64 data_start64 = static_cast<u64>(header.data_table_offset) + raw_entry.data_offset;
+        if (data_start64 > psf_size || raw_entry.param_len > (psf_size - data_start64)) {
+            LOG_ERROR(Core, "PSF data out of bounds for entry {}", i);
+            return false;
+        }
+
+        const u8* data = psf_data + static_cast<size_t>(data_start64);
 
         Entry& entry = entry_list.emplace_back();
-        entry.key = std::string{(char*)(psf_data + header.key_table_offset + raw_entry.key_offset)};
+        entry.key.assign(key_begin, key_end - key_begin);
         entry.param_fmt = static_cast<PSFEntryFmt>(raw_entry.param_fmt.Raw());
         entry.max_len = raw_entry.param_max_len;
-
-        const u8* data = psf_data + header.data_table_offset + raw_entry.data_offset;
 
         switch (entry.param_fmt) {
         case PSFEntryFmt::Binary: {
             std::vector<u8> value(raw_entry.param_len);
-            std::memcpy(value.data(), data, raw_entry.param_len);
+            if (raw_entry.param_len > 0) {
+                std::memcpy(value.data(), data, raw_entry.param_len);
+            }
             map_binaries.emplace(i, std::move(value));
         } break;
         case PSFEntryFmt::Text: {
-            std::string c_str{reinterpret_cast<const char*>(data)};
-            map_strings.emplace(i, std::move(c_str));
+            const char* text_ptr = reinterpret_cast<const char*>(data);
+            const size_t text_buf_len = raw_entry.param_len;
+            const void* text_null = std::memchr(text_ptr, '\0', text_buf_len);
+            const size_t text_len = text_null
+                                        ? static_cast<size_t>(reinterpret_cast<const char*>(text_null) - text_ptr)
+                                        : text_buf_len;
+            map_strings.emplace(i, std::string{text_ptr, text_len});
         } break;
         case PSFEntryFmt::Integer: {
-            ASSERT_MSG(raw_entry.param_len == sizeof(s32), "PSF integer entry size mismatch");
-            s32 integer = *(s32*)data;
+            if (raw_entry.param_len < sizeof(s32)) {
+                LOG_ERROR(Core, "PSF integer entry size mismatch for entry {}", i);
+                return false;
+            }
+            s32 integer{};
+            std::memcpy(&integer, data, sizeof(integer));
             map_integers.emplace(i, integer);
         } break;
         default:
-            UNREACHABLE_MSG("Unknown PSF entry format");
+            LOG_ERROR(Core, "Unknown PSF entry format for entry {}", i);
+            return false;
         }
     }
     return true;
@@ -187,29 +249,38 @@ void PSF::Encode(std::vector<u8>& psf_buffer) const {
 
 std::optional<std::span<const u8>> PSF::GetBinary(std::string_view key) const {
     const auto& [it, index] = FindEntry(key);
-    if (it == entry_list.end()) {
+    if (it == entry_list.end() || it->param_fmt != PSFEntryFmt::Binary) {
         return {};
     }
-    ASSERT(it->param_fmt == PSFEntryFmt::Binary);
-    return std::span{map_binaries.at(index)};
+    const auto map_it = map_binaries.find(index);
+    if (map_it == map_binaries.end()) {
+        return {};
+    }
+    return std::span{map_it->second};
 }
 
 std::optional<std::string_view> PSF::GetString(std::string_view key) const {
     const auto& [it, index] = FindEntry(key);
-    if (it == entry_list.end()) {
+    if (it == entry_list.end() || it->param_fmt != PSFEntryFmt::Text) {
         return {};
     }
-    ASSERT(it->param_fmt == PSFEntryFmt::Text);
-    return std::string_view{map_strings.at(index)};
+    const auto map_it = map_strings.find(index);
+    if (map_it == map_strings.end()) {
+        return {};
+    }
+    return std::string_view{map_it->second};
 }
 
 std::optional<s32> PSF::GetInteger(std::string_view key) const {
     const auto& [it, index] = FindEntry(key);
-    if (it == entry_list.end()) {
+    if (it == entry_list.end() || it->param_fmt != PSFEntryFmt::Integer) {
         return {};
     }
-    ASSERT(it->param_fmt == PSFEntryFmt::Integer);
-    return map_integers.at(index);
+    const auto map_it = map_integers.find(index);
+    if (map_it == map_integers.end()) {
+        return {};
+    }
+    return map_it->second;
 }
 
 void PSF::AddBinary(std::string key, std::vector<u8> value, bool update) {
