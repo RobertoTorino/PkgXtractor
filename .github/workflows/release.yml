@@ -1,0 +1,98 @@
+# Stable Release Workflow for PkgXtractor (C++/Qt)
+# Triggers: tags like v1.2.3
+
+name: CI Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'      # Stable releases only
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.10.2'
+          arch: 'win64_msvc2019_64'  # Adjust if using MSVC 2022 or Clang
+
+
+      # Build Qt GUI version
+      - name: Configure CMake (Qt GUI)
+        run: >
+          cmake -S . -B build-qt -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=ON
+
+      - name: Build Qt GUI (Release)
+        run: >
+          cmake --build build-qt --config Release --target pkgxtractor-qt
+
+      - name: Deploy Qt DLLs
+        run: >
+          C:\Qt\6.10.2\msvc2019_64\bin\windeployqt.exe build-qt\pkgxtractor-qt.exe
+
+      # Build CLI version
+      - name: Configure CMake (CLI)
+        run: >
+          cmake -S . -B build-cli -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF
+
+      - name: Build CLI (Release)
+        run: >
+          cmake --build build-cli --config Release --target pkgxtractor-cli
+
+      - name: Package Artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = "$env:GITHUB_WORKSPACE"
+          $qtDir = Join-Path $root 'build-qt'
+          $cliDir = Join-Path $root 'build-cli'
+          $outDir = Join-Path $root "pkgxtractor-release"
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          # Qt GUI
+          Copy-Item "$qtDir\pkgxtractor-qt.exe" $outDir -Force
+          Copy-Item "$qtDir\*.dll" $outDir -Force
+          # CLI
+          Copy-Item "$cliDir\pkgxtractor-cli.exe" $outDir -Force
+          # Common files
+          Copy-Item "$root\README.md" $outDir -Force
+          Copy-Item "$root\LICENSE*" $outDir -Force
+          $zip = "$root\PkgXtractor-${{ github.ref_name }}.zip"
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
+          $hashQt = (Get-FileHash "$outDir\pkgxtractor-qt.exe" -Algorithm SHA256).Hash.ToUpper()
+          $hashCli = (Get-FileHash "$outDir\pkgxtractor-cli.exe" -Algorithm SHA256).Hash.ToUpper()
+          Set-Content -Path "$root\PkgXtractor-${{ github.ref_name }}.sha256" -Value @(
+            "$hashQt  pkgxtractor-qt.exe"
+            "$hashCli  pkgxtractor-cli.exe"
+          )
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: "Download and extract the ZIP before running PkgXtractor.exe.\n\nVerify the SHA256 checksum with the included .sha256 file."
+          files: |
+            PkgXtractor-v*.zip
+            PkgXtractor-v*.sha256
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate SLSA Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: PkgXtractor-v*.zip

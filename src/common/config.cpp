@@ -138,7 +138,7 @@ static ConfigEntry<bool> isTrophyPopupDisabled(false);
 static ConfigEntry<double> trophyNotificationDuration(6.0);
 static ConfigEntry<string> logFilter("");
 static ConfigEntry<string> logType("sync");
-static ConfigEntry<string> userName("shadPS4");
+static ConfigEntry<string> userName("PkgXtractor");
 static ConfigEntry<string> chooseHomeTab("General");
 static ConfigEntry<bool> isShowSplash(false);
 static ConfigEntry<string> isSideTrophy("right");

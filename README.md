@@ -1,85 +1,62 @@
-# Building PkgXtractor and shadPS4 (only for Windows)
+# pkgxtractor
+## Based on a Fork of shadPS4 0.12.0
 
-These are the current valid Windows build instructions for both `PkgXtractor` and `shadps4`.
+This repository contains the source code for `PkgXtractor`, a PS4 PKG extraction tool. It has been streamlined to focus solely on the components necessary for building `PkgXtractor`, removing any unrelated files and dependencies.
 
-Main docs:
-- Project overview and general setup: [shadPS4-Windows_0.12.0/README.md](shadPS4-Windows_0.12.0/README.md)
-- Contribution/build workflow details: [shadPS4-Windows_0.12.0/CONTRIBUTING.md](shadPS4-Windows_0.12.0/CONTRIBUTING.md)
-- CMake preset definitions: [CMakePresets.json](CMakePresets.json) and [CMakeWindowsPresets.json](CMakeWindowsPresets.json)
+![icon](.\resources\pkgxtractor-icon.png)
 
-## Prerequisites
+---
 
-- CMake 3.20+
-- Visual Studio 2022 (or Build Tools) with C++ workload
-- For Qt builds: Qt 6 (example: `C:\Qt\6.10.2\msvc2022_64`)
+## What remains
 
-## 1) Build PkgXtractor (CLI)
+- `src/common`: shared runtime and logging utilities used by the extractor
+- `src/core/crypto`: PKG decryption helpers
+- `src/core/file_format`: PKG, PSF, TRP, and PlayGo parsing
+- `src/core/loader`: file type detection and ELF helpers used by the tool
+- `src/core/libraries/playgo`: PlayGo type definitions
+- `tools/pkgxtractor`: CLI entrypoint and Qt GUI implementation
+- `tools/pkgxtractor_qt/resources.qrc`: Qt resource file
+- `externals/cryptopp`, `externals/cryptopp-cmake`, `externals/fmt`, `externals/toml11`, `externals/tracy`, `externals/zlib-ng`
+
+Everything related only to `shadPS4`, duplicated release snapshots, and generated build output is removed.
+
+## Windows build only
+
+
+### CLI Build (no Qt required)
+
 
 ```powershell
-cd c:\_repositories\PkgXtractor
-cmake -S . -B build\x64-Release-CLI -G "Visual Studio 17 2022" -A x64 -DENABLE_QT_GUI=OFF
-cmake --build build\x64-Release-CLI --config Release --target PkgXtractor --parallel 8
+cmake --preset x64-Clang-Release
+cmake --build build/x64-Clang-Release --target PkgXtractor --parallel 8
 ```
 
 Output:
-- `build\x64-Release-CLI\Release\pkgxtractor.exe`
+- `build/x64-Clang-Release/pkgxtractor-cli.exe`
 
-## 2) Build PkgXtractor (Qt GUI)
+### Qt GUI Build
+
+You must enable the Qt GUI option and provide your Qt installation path. You can do this by setting the environment variable or passing it as a CMake argument. Example:
 
 ```powershell
-cd c:\_repositories\PkgXtractor
-cmake -S . -B build\x64-Release-Qt -G "Visual Studio 17 2022" -A x64 -DENABLE_QT_GUI=ON -DCMAKE_PREFIX_PATH="C:/Qt/6.10.2/msvc2022_64"
-cmake --build build\x64-Release-Qt --config Release --target PkgXtractor --parallel 8
+# Option 1: Set CMAKE_PREFIX_PATH as an environment variable
+$env:CMAKE_PREFIX_PATH = "C:/Qt/6.10.2/msvc2022_64/lib/cmake/Qt6"
+cmake --preset x64-Clang-Release-Qt -DENABLE_QT_GUI=ON
+
+# Option 2: Pass as a CMake argument
+cmake --preset x64-Clang-Release-Qt -DENABLE_QT_GUI=ON -DCMAKE_PREFIX_PATH="C:/Qt/6.10.2/msvc2022_64/lib/cmake/Qt6"
+
+cmake --build build/x64-Clang-Release-Qt --target PkgXtractor --parallel 8
 ```
+
 
 Output:
-- `build\x64-Release-Qt\Release\pkgxtractor-qt.exe`
+- `build/x64-Clang-Release-Qt/pkgxtractor-qt.exe`
 
-Optional Qt runtime deployment:
 
-```powershell
-& "C:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe" --release --compiler-runtime "build\x64-Release-Qt\Release\pkgxtractor-qt.exe"
-```
-
-## 3) Build shadps4 (CLI)
+Optional runtime deployment:
 
 ```powershell
-cd c:\_repositories\PkgXtractor
-cmake -S . -B build\x64-Release-CLI -G "Visual Studio 17 2022" -A x64 -DENABLE_QT_GUI=OFF
-cmake --build build\x64-Release-CLI --config Release --target shadps4 --parallel 8
+& "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe" --release --compiler-runtime "build/x64-Clang-Release-Qt/pkgxtractor-qt.exe"
 ```
 
-Output:
-- `build\x64-Release-CLI\Release\shadps4-cli.exe`
-
-## 4) Build shadps4 (Qt GUI)
-
-```powershell
-cd c:\_repositories\PkgXtractor
-cmake -S . -B build\x64-Release-Qt -G "Visual Studio 17 2022" -A x64 -DENABLE_QT_GUI=ON -DCMAKE_PREFIX_PATH="C:/Qt/6.10.2/msvc2022_64"
-cmake --build build\x64-Release-Qt --config Release --target shadps4 --parallel 8
-```
-
-```powershell
-cd c:\_repositories\PkgXtractor
-cmake --build build\x64-Release-Qt --config Release --target PkgXtractor --parallel 8
-```
-
-```powershell
-Copy-Item "build\x64-Release-Qt\Release\pkgxtractor-qt.exe" -Destination "D:\EMULATORS\SHADPS4_0.12.0\pkgxtractor-qt.exe" -Force
-```
-
-Output:
-- `build\x64-Release-Qt\Release\shadps4-qt.exe`
-
-Optional Qt runtime deployment:
-
-```powershell
-& "C:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe" --release --compiler-runtime "build\x64-Release-Qt\Release\shadps4-qt.exe"
-```
-
-## Notes
-
-- `ENABLE_QT_GUI=OFF` builds CLI variants (`pkgxtractor.exe`, `shadps4-cli.exe`).
-- `ENABLE_QT_GUI=ON` builds Qt variants (`pkgxtractor-qt.exe`, `shadps4-qt.exe`).
-- Use separate build directories for CLI and Qt to avoid cache/generator conflicts.

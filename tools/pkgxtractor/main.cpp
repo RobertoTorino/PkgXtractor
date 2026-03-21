@@ -23,44 +23,56 @@ std::vector<std::string> SplitString(const std::string& str, char delimiter) {
 }
 
 int main(int argc, char** argv){
-	std::filesystem::path file = "";
-	std::filesystem::path output_folder_path = "";
-	
-	if(argc > 1){
-		file += argv[1];
-		
-		if(argc > 2){
-			output_folder_path += argv[2];
-		}
+	auto print_usage = []() {
+		std::cout << "PkgXtractor CLI\n";
+		std::cout << "Usage: pkgxtractor-cli <PKG_FILE> [OUTPUT_FOLDER]\n";
+		std::cout << "\n";
+		std::cout << "Arguments:\n";
+		std::cout << "  <PKG_FILE>       Path to the PKG file to extract\n";
+		std::cout << "  [OUTPUT_FOLDER]  Optional output directory (default: PKG file's folder)\n";
+		std::cout << "\n";
+		std::cout << "Options:\n";
+		std::cout << "  -h, --help       Show this help message\n";
+	};
+
+	if (argc < 2 || (argc > 1 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h"))) {
+		print_usage();
+		return 0;
 	}
-	
+
+	std::filesystem::path file = argv[1];
+	std::filesystem::path output_folder_path = "";
+	if(argc > 2){
+		output_folder_path = argv[2];
+	}
+
 	if (Loader::DetectFileType(file) == Loader::FileTypes::Pkg) {
 		std::cout << file << " is a valid PKG\n" << std::endl;
-		
+
 		PKG pkg{};
-		
+
 		std::string failreason;
 		if (!pkg.Extract(file, output_folder_path.empty() ? file.parent_path() : output_folder_path,
-		                 failreason)) {
+						 failreason)) {
 			std::cout << "Cannot open PKG file : " << failreason << std::endl;
 		}else{
 			std::cout << "open PKG file success" << std::endl;
-			
+
 			PSF psf{};
-			
+
 			if (!psf.Open(pkg.sfo)) {
 				std::cout << "Could not read SFO." << std::endl;
 			}else{
 				std::cout << "Successfully read SFO." << std::endl;
-				
+
 				auto dlc_flag_data = psf.GetInteger("CONTENT_TYPE");
-				
+
 				if (output_folder_path == ""){
 					output_folder_path = file.parent_path();
 				}
-				
+
 				std::string folder_name = "";
-				
+
 				if(dlc_flag_data && dlc_flag_data.value() != 0){
 					std::cout << "DLC detected.\n";
 					auto title_id_data = psf.GetString("TITLE_ID");
@@ -77,25 +89,25 @@ int main(int argc, char** argv){
 						folder_name.erase(std::remove(folder_name.begin(), folder_name.end(), '\0'), folder_name.end());
 					}
 				}
-				
+
 				if (!folder_name.empty()) {
 					output_folder_path = output_folder_path / folder_name;
 				}
 
 				std::cout << "Game/DLC folder will be extracted to: " << output_folder_path.string()
-				          << std::endl;
+						  << std::endl;
 
 				const u32 files_count = pkg.GetNumberOfFiles();
 				for (u32 index = 0; index < files_count; ++index) {
 					pkg.ExtractFiles(static_cast<int>(index));
 				}
-				
+
 				std::cout << "Extraction complete!\n" << std::endl;
 			}
 		}
 	}else{
 		std::cout << file << " is not a valid PKG file" << std::endl;
 	}
-	
+
 	return 0;
 }

@@ -1,6 +1,6 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
     <qresource>
-        <file alias="icon.png">../../pkgxtractor-icon.png</file>
+        <file alias="icon.png">../../resources/pkgxtractor-icon.png</file>
     </qresource>
 </RCC>

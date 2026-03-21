@@ -1,9 +1,0 @@
-{
-  "revision": 0,
-  "rules": [
-    {
-      "primary-output": "externals\\pugixml\\CMakeFiles\\pugixml-static.dir\\src\\pugixml.cpp.obj"
-    }
-  ],
-  "version": 1
-}

@@ -305,10 +305,6 @@ node_modules/
 *.dsw
 *.dsp
 
-# Visual Studio 6 technical files
-*.ncb
-*.aps
-
 # Visual Studio LightSwitch build output
 **/*.HTMLClient/GeneratedArtifacts
 **/*.DesktopClient/GeneratedArtifacts
@@ -402,12 +398,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-/shadPS4/game/*
-/shadPS4/psf.txt
-/tools/pkg extractor/game/*
-/tools/pkg extractor/*.pkg
-/shadPS4/shadps4.ini
-/emulator/eboot.bin
 /out/*
 /third-party/out/*
 /src/common/scm_rev.cpp

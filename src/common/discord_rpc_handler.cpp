@@ -15,16 +15,7 @@ void RPC::init() {
     rpcEnabled = true;
 }
 
-void RPC::setStatusIdling() {
-    DiscordRichPresence rpc{};
-    rpc.largeImageKey = "https://cdn.jsdelivr.net/gh/shadps4-emu/shadPS4@main/.github/shadps4.png";
-    rpc.largeImageText = "shadPS4 is a PS4 emulator";
-    rpc.startTimestamp = startTimestamp;
-    rpc.details = "Idle";
-
-    status = RPCStatus::Idling;
-    Discord_UpdatePresence(&rpc);
-}
+// Discord RPC not used in PkgXtractor
 
 void RPC::setStatusPlaying(const std::string& game_name, const std::string& game_id) {
     DiscordRichPresence rpc{};
