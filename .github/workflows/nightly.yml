@@ -64,11 +64,23 @@ jobs:
           $hash = (Get-FileHash "$outDir\PkgXtractor.exe" -Algorithm SHA256).Hash.ToUpper()
           Set-Content -Path "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.sha256" -Value "$hash  PkgXtractor.exe"
 
+
+      - name: Set nightly tag and name
+        id: nightly_meta
+        run: |
+          if [ "$GITHUB_REF_NAME" = "dev" ]; then
+            echo "tag=nightly-$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+            echo "name=Nightly #$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
+            echo "name=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Pre-Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name == 'dev' && format('nightly-{0}', github.run_number) || github.ref_name }}
-          name: ${{ github.ref_name == 'dev' && format('Nightly #{0}', github.run_number) || github.ref_name }}
+          tag_name: ${{ steps.nightly_meta.outputs.tag }}
+          name: ${{ steps.nightly_meta.outputs.name }}
           body: "**Beta / Nightly build** — use at your own risk.\n\nDownload and extract the ZIP before running PkgXtractor.exe.\nVerify the SHA256 checksum with the included .sha256 file."
           files: |
             PkgXtractor-*.zip
