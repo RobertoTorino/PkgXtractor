@@ -3,7 +3,7 @@
 
 This repository contains the source code for `PkgXtractor`, a PS4 PKG extraction tool. It has been streamlined to focus solely on the components necessary for building `PkgXtractor`, removing any unrelated files and dependencies.
 
-![icon](resources\pkgxtractor-icon.png)
+![icon](resources/pkgxtractor-icon.png)
 
 ---
 
