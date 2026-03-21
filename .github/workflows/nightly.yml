@@ -6,9 +6,9 @@ name: Nightly / Beta Build
 on:
   push:
     tags:
-      - 'test-v*'   # Manual beta tags (e.g. test-v1.2.3)
+      - "test-v*" # Manual beta tags (e.g. test-v1.2.3)
     branches:
-      - dev         # Auto-nightly on every push to dev
+      - dev # Auto-nightly on every push to dev
   workflow_dispatch:
 
 jobs:
@@ -32,8 +32,8 @@ jobs:
       - name: Set up Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.10.2'
-          arch: 'win64_msvc2019_64'  # Adjust if using MSVC 2022 or Clang
+          version: "6.10.2"
+          arch: "win64_msvc2019_64" # Adjust if using MSVC 2022 or Clang
 
       - name: Configure CMake
         run: >
@@ -63,7 +63,6 @@ jobs:
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
           $hash = (Get-FileHash "$outDir\PkgXtractor.exe" -Algorithm SHA256).Hash.ToUpper()
           Set-Content -Path "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.sha256" -Value "$hash  PkgXtractor.exe"
-
 
       - name: Set nightly tag and name
         id: nightly_meta
