@@ -1,12 +1,12 @@
 # Stable Release Workflow for PkgXtractor (C++/Qt)
-# Triggers: tags like v1.2.3
+# Triggers automatically on push/merge to the 'main' branch
 
 name: CI Build and Release
 
 on:
   push:
-    tags:
-      - "v*" # Stable releases only
+    branches:
+      - main # Changed from tags to the main branch
 
 jobs:
   build:
@@ -42,7 +42,6 @@ jobs:
           cmake --build build-qt --config Release --target pkgxtractor-qt
 
       - name: Deploy Qt DLLs
-        # Uses system PATH and targets the Multi-Config Release subfolder
         run: windeployqt6 build-qt\Release\pkgxtractor-qt.exe
 
       # --- Build CLI version ---
@@ -54,14 +53,42 @@ jobs:
         run: >
           cmake --build build-cli --config Release --target pkgxtractor-cli
 
+      # --- Generate Auto-Tag from CMakeLists.txt ---
+      - name: Generate Version Tag
+        id: version_meta
+        shell: pwsh
+        run: |
+          # 1. Read the entire CMakeLists.txt file
+          $cmakeText = Get-Content -Path "CMakeLists.txt" -Raw
+          
+          # 2. Use a Regular Expression to find 'set(APP_VERSION "X.Y.Z")'
+          if ($cmakeText -match 'set\(\s*APP_VERSION\s+"([^"]+)"\s*\)') {
+              $baseVersion = $matches[1]
+          } else {
+              Write-Error "Could not find APP_VERSION in CMakeLists.txt"
+              exit 1
+          }
+
+          # 3. Combine base version with GitHub run number (e.g., v0.12.0-b42)
+          # Using '-b' to clearly separate your base version from the build number
+          $tag = "v$baseVersion-b$env:GITHUB_RUN_NUMBER"
+          
+          # Print out for the logs so you can see it worked
+          echo "Extracted Base Version: $baseVersion"
+          echo "Generated Tag: $tag"
+          
+          # Pass the tag to the next steps
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
       # --- Package and Release ---
       - name: Package Artifacts
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version_meta.outputs.tag }} # Pulls the tag generated above
         run: |
           $ErrorActionPreference = 'Stop'
           $root = "$env:GITHUB_WORKSPACE"
           
-          # Updated to target the Release subfolders where Ninja places the built exes
           $qtDir = Join-Path $root 'build-qt\Release'
           $cliDir = Join-Path $root 'build-cli\Release'
           $outDir = Join-Path $root "pkgxtractor-release"
@@ -79,14 +106,14 @@ jobs:
           Copy-Item "$root\README.md" $outDir -Force
           Copy-Item "$root\LICENSE*" $outDir -Force
           
-          # Compress to ZIP
-          $zip = "$root\PkgXtractor-${{ github.ref_name }}.zip"
+          # Compress to ZIP using the new auto-tag
+          $zip = "$root\PkgXtractor-$env:RELEASE_TAG.zip"
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
           
           # Generate SHA256 hashes
           $hashQt = (Get-FileHash "$outDir\pkgxtractor-qt.exe" -Algorithm SHA256).Hash.ToUpper()
           $hashCli = (Get-FileHash "$outDir\pkgxtractor-cli.exe" -Algorithm SHA256).Hash.ToUpper()
-          Set-Content -Path "$root\PkgXtractor-${{ github.ref_name }}.sha256" -Value @(
+          Set-Content -Path "$root\PkgXtractor-$env:RELEASE_TAG.sha256" -Value @(
             "$hashQt  pkgxtractor-qt.exe"
             "$hashCli  pkgxtractor-cli.exe"
           )
@@ -94,14 +121,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Switched to a multi-line string block for better YAML readability
+          tag_name: ${{ steps.version_meta.outputs.tag }}
+          name: Release ${{ steps.version_meta.outputs.tag }}
           body: |
-            Download and extract the ZIP before running PkgXtractor.
+            Automated stable release.
             
+            Download and extract the ZIP before running PkgXtractor.
             Verify the SHA256 checksum with the included .sha256 file.
           files: |
-            PkgXtractor-v*.zip
-            PkgXtractor-v*.sha256
+            PkgXtractor-*.zip
+            PkgXtractor-*.sha256
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,4 +138,5 @@ jobs:
       - name: Generate SLSA Provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: PkgXtractor-v*.zip
+          subject-path: PkgXtractor-*.zip
+          

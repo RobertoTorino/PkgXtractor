@@ -46,11 +46,12 @@ jobs:
 
       - name: Package Artifacts
         shell: pwsh
+        env:
+          NIGHTLY_TAG: ${{ steps.nightly_meta.outputs.tag }} # Pulls the timestamped tag
         run: |
           $ErrorActionPreference = 'Stop'
           $root = "$env:GITHUB_WORKSPACE"
           
-          # Updated to target the Release subfolder where Ninja places the built exe
           $buildDir = Join-Path $root 'build\Release'
           $outDir = Join-Path $root "pkgxtractor-nightly"
           
@@ -61,23 +62,41 @@ jobs:
           Copy-Item "$root\README.md" $outDir -Force
           Copy-Item "$root\LICENSE*" $outDir -Force
           
-          $zip = "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.zip"
+          # Use the new timestamped tag for the ZIP file
+          $zip = "$root\PkgXtractor-$env:NIGHTLY_TAG.zip"
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
           
+          # Use the new timestamped tag for the Hash file
           $hash = (Get-FileHash "$outDir\PkgXtractor.exe" -Algorithm SHA256).Hash.ToUpper()
-          Set-Content -Path "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.sha256" -Value "$hash  PkgXtractor.exe"
+          Set-Content -Path "$root\PkgXtractor-$env:NIGHTLY_TAG.sha256" -Value "$hash  PkgXtractor.exe"
 
+      # --- Generate Auto-Tag with Date & Time ---
       - name: Set nightly tag and name
         id: nightly_meta
         shell: pwsh
         run: |
-          if ("$env:GITHUB_REF_NAME" -eq "dev") {
-            echo "tag=nightly-$env:GITHUB_RUN_NUMBER" >> $env:GITHUB_OUTPUT
-            echo "name=Nightly #$env:GITHUB_RUN_NUMBER" >> $env:GITHUB_OUTPUT
+          # 1. Read the base version from CMakeLists.txt
+          $cmakeText = Get-Content -Path "CMakeLists.txt" -Raw
+          if ($cmakeText -match 'set\(\s*APP_VERSION\s+"([^"]+)"\s*\)') {
+              $baseVersion = $matches[1]
           } else {
-            echo "tag=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
-            echo "name=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+              Write-Error "Could not find APP_VERSION in CMakeLists.txt"
+              exit 1
           }
+
+          # 2. Get the current date and time
+          # Format: YearMonthDay-HourMinuteSecond (e.g., 20260322-044615)
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+          # 3. Combine them into the final tag and release name
+          $tag = "v$baseVersion-nightly-$timestamp"
+          $name = "Nightly v$baseVersion ($timestamp)"
+          
+          echo "Extracted Base Version: $baseVersion"
+          echo "Generated Tag: $tag"
+          
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "name=$name" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Pre-Release
         uses: softprops/action-gh-release@v2

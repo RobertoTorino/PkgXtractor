@@ -1,3 +1,5 @@
+[![Nightly / Beta Build](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml/badge.svg)](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml)
+
 # pkgxtractor
 ## Based on a Fork of shadPS4 0.12.0
 
