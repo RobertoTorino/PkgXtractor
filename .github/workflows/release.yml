@@ -40,7 +40,7 @@ jobs:
 
       - name: Build Qt GUI (Release)
         run: >
-          cmake --build build-qt --config Release --target pkgxtractor-qt
+          cmake --build build-qt --config Release --target PkgXtractor
 
       - name: Deploy Qt DLLs
         run: windeployqt6 build-qt\Release\pkgxtractor-qt.exe
@@ -52,7 +52,7 @@ jobs:
 
       - name: Build CLI (Release)
         run: >
-          cmake --build build-cli --config Release --target pkgxtractor-cli
+          cmake --build build-cli --config Release --target PkgXtractor
 
       # --- Generate Auto-Tag from CMakeLists.txt ---
       - name: Generate Version Tag

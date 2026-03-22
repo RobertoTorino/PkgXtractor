@@ -3,7 +3,7 @@ name: Nightly / Beta Build
 on:
   push:
     tags:
-      - "test-v*" # Manual beta tags (e.g. test-v1.2.3)
+      - "test-v*" 
     branches:
       - dev # Auto-nightly on every push to dev
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
-          submodules: recursive
+          submodules: recursive # Fixes the empty dependency folders!
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -33,43 +33,26 @@ jobs:
           version: "6.10.2"
           arch: "win64_msvc2022_64"
 
-      - name: Configure CMake
+      # --- Build Qt GUI version ---
+      - name: Configure CMake (Qt GUI)
         run: >
-          cmake -S . -B build -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=ON
+          cmake -S . -B build-qt -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=ON
 
-      - name: Build (Release)
+      - name: Build Qt GUI (Release)
         run: >
-          cmake --build build --config Release --target PkgXtractor
+          cmake --build build-qt --config Release --target PkgXtractor
 
       - name: Deploy Qt DLLs
-        # Uses the system PATH set by the Qt Action and targets the Multi-Config Release folder
-        run: windeployqt6 build\Release\PkgXtractor.exe
+        run: windeployqt6 build-qt\Release\pkgxtractor-qt.exe
 
-      - name: Package Artifacts
-        shell: pwsh
-        env:
-          NIGHTLY_TAG: ${{ steps.nightly_meta.outputs.tag }} # Pulls the timestamped tag
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = "$env:GITHUB_WORKSPACE"
-          
-          $buildDir = Join-Path $root 'build\Release'
-          $outDir = Join-Path $root "pkgxtractor-nightly"
-          
-          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          
-          Copy-Item "$buildDir\PkgXtractor.exe" $outDir -Force
-          Copy-Item "$buildDir\*.dll" $outDir -Force
-          Copy-Item "$root\README.md" $outDir -Force
-          Copy-Item "$root\LICENSE*" $outDir -Force
-          
-          # Use the new timestamped tag for the ZIP file
-          $zip = "$root\PkgXtractor-$env:NIGHTLY_TAG.zip"
-          Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
-          
-          # Use the new timestamped tag for the Hash file
-          $hash = (Get-FileHash "$outDir\PkgXtractor.exe" -Algorithm SHA256).Hash.ToUpper()
-          Set-Content -Path "$root\PkgXtractor-$env:NIGHTLY_TAG.sha256" -Value "$hash  PkgXtractor.exe"
+      # --- Build CLI version ---
+      - name: Configure CMake (CLI)
+        run: >
+          cmake -S . -B build-cli -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF
+
+      - name: Build CLI (Release)
+        run: >
+          cmake --build build-cli --config Release --target PkgXtractor
 
       # --- Generate Auto-Tag with Date & Time ---
       - name: Set nightly tag and name
@@ -86,18 +69,52 @@ jobs:
           }
 
           # 2. Get the current date and time
-          # Format: YearMonthDay-HourMinuteSecond (e.g., 20260322-044615)
           $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
           # 3. Combine them into the final tag and release name
           $tag = "v$baseVersion-nightly-$timestamp"
           $name = "Nightly v$baseVersion ($timestamp)"
           
-          echo "Extracted Base Version: $baseVersion"
-          echo "Generated Tag: $tag"
-          
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
           echo "name=$name" >> $env:GITHUB_OUTPUT
+
+      # --- Package and Release ---
+      - name: Package Artifacts
+        shell: pwsh
+        env:
+          NIGHTLY_TAG: ${{ steps.nightly_meta.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = "$env:GITHUB_WORKSPACE"
+          
+          $qtDir = Join-Path $root 'build-qt\Release'
+          $cliDir = Join-Path $root 'build-cli\Release'
+          $outDir = Join-Path $root "pkgxtractor-nightly"
+          
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          
+          # Qt GUI files
+          Copy-Item "$qtDir\pkgxtractor-qt.exe" $outDir -Force
+          Copy-Item "$qtDir\*.dll" $outDir -Force
+          
+          # CLI files
+          Copy-Item "$cliDir\pkgxtractor-cli.exe" $outDir -Force
+          
+          # Common files
+          Copy-Item "$root\README.md" $outDir -Force
+          Copy-Item "$root\LICENSE*" $outDir -Force
+          
+          # Compress to ZIP
+          $zip = "$root\PkgXtractor-$env:NIGHTLY_TAG.zip"
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
+          
+          # Generate SHA256 hashes for BOTH executables
+          $hashQt = (Get-FileHash "$outDir\pkgxtractor-qt.exe" -Algorithm SHA256).Hash.ToUpper()
+          $hashCli = (Get-FileHash "$outDir\pkgxtractor-cli.exe" -Algorithm SHA256).Hash.ToUpper()
+          Set-Content -Path "$root\PkgXtractor-$env:NIGHTLY_TAG.sha256" -Value @(
+            "$hashQt  pkgxtractor-qt.exe"
+            "$hashCli  pkgxtractor-cli.exe"
+          )
 
       - name: Create GitHub Pre-Release
         uses: softprops/action-gh-release@v2
@@ -107,8 +124,8 @@ jobs:
           body: |
             **Beta / Nightly build** — use at your own risk.
             
-            Download and extract the ZIP before running PkgXtractor.exe.
-            Verify the SHA256 checksum with the included .sha256 file.
+            Download and extract the ZIP before running PkgXtractor.
+            Verify the SHA256 checksums with the included .sha256 file.
           files: |
             PkgXtractor-*.zip
             PkgXtractor-*.sha256
@@ -120,3 +137,4 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: PkgXtractor-*.zip
+          
