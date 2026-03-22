@@ -30,9 +30,9 @@ jobs:
         uses: jurplel/install-qt-action@v3
         with:
           version: "6.10.2"
-          arch: "win64_msvc2019_64" # Adjust if using MSVC 2022 or Clang
+          arch: "win64_msvc2022_64"
 
-      # Build Qt GUI version
+      # --- Build Qt GUI version ---
       - name: Configure CMake (Qt GUI)
         run: >
           cmake -S . -B build-qt -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=ON
@@ -42,10 +42,10 @@ jobs:
           cmake --build build-qt --config Release --target pkgxtractor-qt
 
       - name: Deploy Qt DLLs
-        run: >
-          C:\Qt\6.10.2\msvc2019_64\bin\windeployqt.exe build-qt\pkgxtractor-qt.exe
+        # Uses system PATH and targets the Multi-Config Release subfolder
+        run: windeployqt6 build-qt\Release\pkgxtractor-qt.exe
 
-      # Build CLI version
+      # --- Build CLI version ---
       - name: Configure CMake (CLI)
         run: >
           cmake -S . -B build-cli -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF
@@ -54,25 +54,36 @@ jobs:
         run: >
           cmake --build build-cli --config Release --target pkgxtractor-cli
 
+      # --- Package and Release ---
       - name: Package Artifacts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $root = "$env:GITHUB_WORKSPACE"
-          $qtDir = Join-Path $root 'build-qt'
-          $cliDir = Join-Path $root 'build-cli'
+          
+          # Updated to target the Release subfolders where Ninja places the built exes
+          $qtDir = Join-Path $root 'build-qt\Release'
+          $cliDir = Join-Path $root 'build-cli\Release'
           $outDir = Join-Path $root "pkgxtractor-release"
+          
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          # Qt GUI
+          
+          # Qt GUI files
           Copy-Item "$qtDir\pkgxtractor-qt.exe" $outDir -Force
           Copy-Item "$qtDir\*.dll" $outDir -Force
-          # CLI
+          
+          # CLI files
           Copy-Item "$cliDir\pkgxtractor-cli.exe" $outDir -Force
+          
           # Common files
           Copy-Item "$root\README.md" $outDir -Force
           Copy-Item "$root\LICENSE*" $outDir -Force
+          
+          # Compress to ZIP
           $zip = "$root\PkgXtractor-${{ github.ref_name }}.zip"
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
+          
+          # Generate SHA256 hashes
           $hashQt = (Get-FileHash "$outDir\pkgxtractor-qt.exe" -Algorithm SHA256).Hash.ToUpper()
           $hashCli = (Get-FileHash "$outDir\pkgxtractor-cli.exe" -Algorithm SHA256).Hash.ToUpper()
           Set-Content -Path "$root\PkgXtractor-${{ github.ref_name }}.sha256" -Value @(
@@ -83,7 +94,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: "Download and extract the ZIP before running PkgXtractor.exe.\n\nVerify the SHA256 checksum with the included .sha256 file."
+          # Switched to a multi-line string block for better YAML readability
+          body: |
+            Download and extract the ZIP before running PkgXtractor.
+            
+            Verify the SHA256 checksum with the included .sha256 file.
           files: |
             PkgXtractor-v*.zip
             PkgXtractor-v*.sha256

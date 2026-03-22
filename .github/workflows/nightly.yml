@@ -30,7 +30,7 @@ jobs:
         uses: jurplel/install-qt-action@v3
         with:
           version: "6.10.2"
-          arch: "win64_msvc2019_64" # Adjust if using MSVC 2022 or Clang
+          arch: "win64_msvc2022_64"
 
       - name: Configure CMake
         run: >
@@ -41,43 +41,54 @@ jobs:
           cmake --build build --config Release --target PkgXtractor
 
       - name: Deploy Qt DLLs
-        run: >
-          C:\Qt\6.10.2\msvc2019_64\bin\windeployqt.exe build\PkgXtractor.exe
+        # Uses the system PATH set by the Qt Action and targets the Multi-Config Release folder
+        run: windeployqt6 build\Release\PkgXtractor.exe
 
       - name: Package Artifacts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $root = "$env:GITHUB_WORKSPACE"
-          $buildDir = Join-Path $root 'build'
+          
+          # Updated to target the Release subfolder where Ninja places the built exe
+          $buildDir = Join-Path $root 'build\Release'
           $outDir = Join-Path $root "pkgxtractor-nightly"
+          
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          
           Copy-Item "$buildDir\PkgXtractor.exe" $outDir -Force
           Copy-Item "$buildDir\*.dll" $outDir -Force
           Copy-Item "$root\README.md" $outDir -Force
           Copy-Item "$root\LICENSE*" $outDir -Force
+          
           $zip = "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.zip"
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip -Force
+          
           $hash = (Get-FileHash "$outDir\PkgXtractor.exe" -Algorithm SHA256).Hash.ToUpper()
           Set-Content -Path "$root\PkgXtractor-$env:GITHUB_RUN_NUMBER.sha256" -Value "$hash  PkgXtractor.exe"
 
       - name: Set nightly tag and name
         id: nightly_meta
+        shell: pwsh
         run: |
-          if [ "$GITHUB_REF_NAME" = "dev" ]; then
-            echo "tag=nightly-$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
-            echo "name=Nightly #$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
-          else
-            echo "tag=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
-            echo "name=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
-          fi
+          if ("$env:GITHUB_REF_NAME" -eq "dev") {
+            echo "tag=nightly-$env:GITHUB_RUN_NUMBER" >> $env:GITHUB_OUTPUT
+            echo "name=Nightly #$env:GITHUB_RUN_NUMBER" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "tag=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+            echo "name=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Create GitHub Pre-Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.nightly_meta.outputs.tag }}
           name: ${{ steps.nightly_meta.outputs.name }}
-          body: "**Beta / Nightly build** — use at your own risk.\n\nDownload and extract the ZIP before running PkgXtractor.exe.\nVerify the SHA256 checksum with the included .sha256 file."
+          body: |
+            **Beta / Nightly build** — use at your own risk.
+            
+            Download and extract the ZIP before running PkgXtractor.exe.
+            Verify the SHA256 checksum with the included .sha256 file.
           files: |
             PkgXtractor-*.zip
             PkgXtractor-*.sha256
