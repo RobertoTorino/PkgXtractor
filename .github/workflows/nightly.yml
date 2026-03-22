@@ -5,7 +5,7 @@ on:
     tags:
       - "test-v*" 
     branches:
-      - dev # Auto-nightly on every push to dev
+      - develop # Auto-nightly on every push to dev
   workflow_dispatch:
 
 jobs:
