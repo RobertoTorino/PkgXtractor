@@ -3,17 +3,17 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-if (WIN32 AND NOT DEFINED CMAKE_ASM_MASM_COMPILER)
-    set(CMAKE_ASM_MASM_COMPILER
-        "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/ml64.exe"
-        CACHE FILEPATH "MASM compiler")
-endif()
+# if (WIN32 AND NOT DEFINED CMAKE_ASM_MASM_COMPILER)
+#     set(CMAKE_ASM_MASM_COMPILER
+#         "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/ml64.exe"
+#         CACHE FILEPATH "MASM compiler")
+# endif()
 
-if (WIN32)
-    set(CMAKE_ASM_MASM_FLAGS
-        "${CMAKE_ASM_MASM_FLAGS} /I\"C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared\""
-        CACHE STRING "MASM flags" FORCE)
-endif()
+# if (WIN32)
+#     set(CMAKE_ASM_MASM_FLAGS
+#         "${CMAKE_ASM_MASM_FLAGS} /I\"C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared\""
+#         CACHE STRING "MASM flags" FORCE)
+# endif()
 
 project(PkgXtractor LANGUAGES C CXX ASM)
 
