@@ -72,7 +72,7 @@ jobs:
 
           # 3. Combine base version with GitHub run number (e.g., v0.12.0-b42)
           # Using '-b' to clearly separate your base version from the build number
-          $tag = "v$baseVersion-b$env:GITHUB_RUN_NUMBER"
+          $tag = "v$baseVersion"
           
           # Print out for the logs so you can see it worked
           echo "Extracted Base Version: $baseVersion"
