@@ -124,6 +124,44 @@ jobs:
             "$hashCli  pkgxtractor-cli.exe"
           )
 
+        # --- Auto Version Bump (patch) ---
+        - name: Auto Version Bump (commit message)
+          if: github.ref == 'refs/heads/main'
+          shell: pwsh
+          run: |
+            $file = "CMakeLists.txt"
+            $text = Get-Content $file -Raw
+            $commitMsg = git log -1 --pretty=%B
+            if ($text -match 'set\(APP_VERSION\s+"(\d+)\.(\d+)\.(\d+)"\)') {
+              $major = [int]$matches[1]
+              $minor = [int]$matches[2]
+              $patch = [int]$matches[3]
+              if ($commitMsg -match 'BREAKING CHANGE|!') {
+                $major++
+                $minor = 0
+                $patch = 0
+                $bumpType = 'major'
+              } elseif ($commitMsg -match 'feat:') {
+                $minor++
+                $patch = 0
+                $bumpType = 'minor'
+              } else {
+                $patch++
+                $bumpType = 'patch'
+              }
+              $newVersion = "set(APP_VERSION \"$major.$minor.$patch\")"
+              $text = [regex]::Replace($text, 'set\(APP_VERSION\s+"\d+\.\d+\.\d+"\)', $newVersion)
+              Set-Content $file $text
+              git config user.name "github-actions"
+              git config user.email "github-actions@github.com"
+              git add $file
+              git commit -m "ci: bump $bumpType version to $major.$minor.$patch [skip ci]"
+              git push
+            } else {
+              Write-Error "APP_VERSION not found in CMakeLists.txt"
+              exit 1
+            }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

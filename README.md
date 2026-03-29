@@ -57,6 +57,36 @@ Output:
 
 
 Optional runtime deployment:
+---
+
+## Automated Version Bumping (Release Workflow)
+
+When you merge to the main branch, the release workflow will automatically bump the version in `CMakeLists.txt` based on your latest commit message:
+
+- **Major version bump**: If your commit message contains `BREAKING CHANGE` or `!` (exclamation mark after the type), the major version is incremented and minor/patch are reset to 0.
+- **Minor version bump**: If your commit message contains `feat:`, the minor version is incremented and patch is reset to 0.
+- **Patch version bump**: For all other commit messages, only the patch version is incremented.
+
+### Examples
+
+**Major bump:**
+```
+refactor!: change PKG extraction logic
+
+BREAKING CHANGE: The extraction API has changed.
+```
+
+**Minor bump:**
+```
+feat: add support for new PKG metadata field
+```
+
+**Patch bump:**
+```
+fix: correct typo in log output
+```
+
+The new version is committed and pushed automatically after each successful release build on main.
 
 ```powershell
 & "C:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe" --release --compiler-runtime "build/x64-Clang-Release-Qt/pkgxtractor-qt.exe"

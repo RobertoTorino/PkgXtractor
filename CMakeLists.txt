@@ -59,7 +59,7 @@ pkgxtractor_git_or_default(GIT_REMOTE_NAME COMMAND git remote DEFAULT origin)
 pkgxtractor_git_or_default(GIT_REMOTE_URL COMMAND git config --get remote.origin.url DEFAULT unknown)
 
 string(TIMESTAMP BUILD_DATE "%Y-%m-%d %H:%M:%S")
-set(APP_VERSION "0.1.0")
+set(APP_VERSION "1.0.0")
 set(APP_IS_RELEASE true)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/common/scm_rev.cpp.in"
                "${CMAKE_CURRENT_BINARY_DIR}/src/common/scm_rev.cpp" @ONLY)
