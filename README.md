@@ -1,4 +1,4 @@
-[![CI Build and Release](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/release.yml/badge.svg)](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/release.yml) [![Nightly / Beta Build](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml/badge.svg)](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml)
+[![CI Build and Release](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/release.yml/badge.svg)](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/release.yml) [![Nightly / Beta Build](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml/badge.svg)](https://github.com/RobertoTorino/PkgXtractor/actions/workflows/nightly.yml) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 # pkgxtractor
 ## Based on a Fork of shadPS4 0.12.0
