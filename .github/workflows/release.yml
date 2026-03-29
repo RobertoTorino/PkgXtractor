@@ -99,6 +99,11 @@ jobs:
           # Qt GUI files
           Copy-Item "$qtDir\pkgxtractor-qt.exe" $outDir -Force
           Copy-Item "$qtDir\*.dll" $outDir -Force
+
+          # Qt platforms directory (for qwindows.dll)
+          if (Test-Path "$qtDir\platforms") {
+            Copy-Item "$qtDir\platforms" $outDir -Recurse -Force
+          }
           
           # CLI files
           Copy-Item "$cliDir\pkgxtractor-cli.exe" $outDir -Force
